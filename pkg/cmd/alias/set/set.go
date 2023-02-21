@@ -2,13 +2,13 @@ package set
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/cli/cli/internal/config"
-	"github.com/cli/cli/pkg/cmdutil"
-	"github.com/cli/cli/pkg/iostreams"
+	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/google/shlex"
 	"github.com/spf13/cobra"
 )
@@ -109,10 +109,7 @@ func setRun(opts *SetOptions) error {
 		return err
 	}
 
-	aliasCfg, err := cfg.Aliases()
-	if err != nil {
-		return err
-	}
+	aliasCfg := cfg.Aliases()
 
 	expansion, err := getExpansion(opts)
 	if err != nil {
@@ -139,7 +136,7 @@ func setRun(opts *SetOptions) error {
 	}
 
 	successMsg := fmt.Sprintf("%s Added alias.", cs.SuccessIcon())
-	if oldExpansion, ok := aliasCfg.Get(opts.Name); ok {
+	if oldExpansion, err := aliasCfg.Get(opts.Name); err == nil {
 		successMsg = fmt.Sprintf("%s Changed alias %s from %s to %s",
 			cs.SuccessIcon(),
 			cs.Bold(opts.Name),
@@ -148,9 +145,11 @@ func setRun(opts *SetOptions) error {
 		)
 	}
 
-	err = aliasCfg.Add(opts.Name, expansion)
+	aliasCfg.Add(opts.Name, expansion)
+
+	err = cfg.Write()
 	if err != nil {
-		return fmt.Errorf("could not create alias: %s", err)
+		return err
 	}
 
 	if isTerminal {
@@ -162,7 +161,7 @@ func setRun(opts *SetOptions) error {
 
 func getExpansion(opts *SetOptions) (string, error) {
 	if opts.Expansion == "-" {
-		stdin, err := ioutil.ReadAll(opts.IO.In)
+		stdin, err := io.ReadAll(opts.IO.In)
 		if err != nil {
 			return "", fmt.Errorf("failed to read from STDIN: %w", err)
 		}

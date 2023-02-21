@@ -1,21 +1,10 @@
+//go:build windows
 // +build windows
 
 package iostreams
 
-import (
-	"os"
-
-	"golang.org/x/sys/windows"
-)
-
-func (s *IOStreams) EnableVirtualTerminalProcessing() {
-	if !s.IsStdoutTTY() {
-		return
-	}
-
-	stdout := windows.Handle(s.originalOut.(*os.File).Fd())
-
-	var originalMode uint32
-	windows.GetConsoleMode(stdout, &originalMode)
-	windows.SetConsoleMode(stdout, originalMode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+func hasAlternateScreenBuffer(hasTrueColor bool) bool {
+	// on Windows we just assume that alternate screen buffer is supported if we
+	// enabled virtual terminal processing, which in turn enables truecolor
+	return hasTrueColor
 }

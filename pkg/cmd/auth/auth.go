@@ -1,20 +1,22 @@
 package auth
 
 import (
-	gitCredentialCmd "github.com/cli/cli/pkg/cmd/auth/gitcredential"
-	authLoginCmd "github.com/cli/cli/pkg/cmd/auth/login"
-	authLogoutCmd "github.com/cli/cli/pkg/cmd/auth/logout"
-	authRefreshCmd "github.com/cli/cli/pkg/cmd/auth/refresh"
-	authStatusCmd "github.com/cli/cli/pkg/cmd/auth/status"
-	"github.com/cli/cli/pkg/cmdutil"
+	gitCredentialCmd "github.com/cli/cli/v2/pkg/cmd/auth/gitcredential"
+	authLoginCmd "github.com/cli/cli/v2/pkg/cmd/auth/login"
+	authLogoutCmd "github.com/cli/cli/v2/pkg/cmd/auth/logout"
+	authRefreshCmd "github.com/cli/cli/v2/pkg/cmd/auth/refresh"
+	authSetupGitCmd "github.com/cli/cli/v2/pkg/cmd/auth/setupgit"
+	authStatusCmd "github.com/cli/cli/v2/pkg/cmd/auth/status"
+	authTokenCmd "github.com/cli/cli/v2/pkg/cmd/auth/token"
+	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
 
 func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "auth <command>",
-		Short: "Login, logout, and refresh your authentication",
-		Long:  `Manage gh's authentication state.`,
+		Use:     "auth <command>",
+		Short:   "Authenticate gh and git with GitHub",
+		GroupID: "core",
 	}
 
 	cmdutil.DisableAuthCheck(cmd)
@@ -24,6 +26,8 @@ func NewCmdAuth(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(authStatusCmd.NewCmdStatus(f, nil))
 	cmd.AddCommand(authRefreshCmd.NewCmdRefresh(f, nil))
 	cmd.AddCommand(gitCredentialCmd.NewCmdCredential(f, nil))
+	cmd.AddCommand(authSetupGitCmd.NewCmdSetupGit(f, nil))
+	cmd.AddCommand(authTokenCmd.NewCmdToken(f, nil))
 
 	return cmd
 }

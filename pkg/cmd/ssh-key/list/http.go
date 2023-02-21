@@ -2,19 +2,17 @@ package list
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 
-	"github.com/cli/cli/api"
-	"github.com/cli/cli/internal/ghinstance"
+	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/ghinstance"
 )
 
-var scopesError = errors.New("insufficient OAuth scopes")
-
 type sshKey struct {
+	ID        int
 	Key       string
 	Title     string
 	CreatedAt time.Time `json:"created_at"`
@@ -37,13 +35,11 @@ func userKeys(httpClient *http.Client, host, userHandle string) ([]sshKey, error
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 404 {
-		return nil, scopesError
-	} else if resp.StatusCode > 299 {
+	if resp.StatusCode > 299 {
 		return nil, api.HandleHTTPError(resp)
 	}
 
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}

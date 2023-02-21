@@ -6,15 +6,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cli/cli/api"
-	prShared "github.com/cli/cli/pkg/cmd/pr/shared"
-	"github.com/cli/cli/pkg/iostreams"
-	"github.com/cli/cli/pkg/text"
-	"github.com/cli/cli/utils"
+	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/text"
+	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
+	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/utils"
 )
 
-func PrintIssues(io *iostreams.IOStreams, prefix string, totalCount int, issues []api.Issue) {
+func PrintIssues(io *iostreams.IOStreams, now time.Time, prefix string, totalCount int, issues []api.Issue) {
 	cs := io.ColorScheme()
+	//nolint:staticcheck // SA1019: utils.NewTablePrinter is deprecated: use internal/tableprinter
 	table := utils.NewTablePrinter(io)
 	for _, issue := range issues {
 		issueNum := strconv.Itoa(issue.Number)
@@ -22,20 +23,14 @@ func PrintIssues(io *iostreams.IOStreams, prefix string, totalCount int, issues 
 			issueNum = "#" + issueNum
 		}
 		issueNum = prefix + issueNum
-		labels := IssueLabelList(issue, cs)
-		if labels != "" && table.IsTTY() {
-			labels = fmt.Sprintf("(%s)", labels)
-		}
-		now := time.Now()
-		ago := now.Sub(issue.UpdatedAt)
-		table.AddField(issueNum, nil, cs.ColorFromString(prShared.ColorForState(issue.State)))
+		table.AddField(issueNum, nil, cs.ColorFromString(prShared.ColorForIssueState(issue)))
 		if !table.IsTTY() {
 			table.AddField(issue.State, nil, nil)
 		}
-		table.AddField(text.ReplaceExcessiveWhitespace(issue.Title), nil, nil)
-		table.AddField(labels, truncateLabels, cs.Gray)
+		table.AddField(text.RemoveExcessiveWhitespace(issue.Title), nil, nil)
+		table.AddField(issueLabelList(&issue, cs, table.IsTTY()), nil, nil)
 		if table.IsTTY() {
-			table.AddField(utils.FuzzyAgo(ago), nil, cs.Gray)
+			table.AddField(text.FuzzyAgo(now, issue.UpdatedAt), nil, cs.Gray)
 		} else {
 			table.AddField(issue.UpdatedAt.String(), nil, nil)
 		}
@@ -48,22 +43,18 @@ func PrintIssues(io *iostreams.IOStreams, prefix string, totalCount int, issues 
 	}
 }
 
-func truncateLabels(w int, t string) string {
-	if len(t) < 2 {
-		return t
-	}
-	truncated := text.Truncate(w-2, t[1:len(t)-1])
-	return fmt.Sprintf("(%s)", truncated)
-}
-
-func IssueLabelList(issue api.Issue, cs *iostreams.ColorScheme) string {
+func issueLabelList(issue *api.Issue, cs *iostreams.ColorScheme, colorize bool) string {
 	if len(issue.Labels.Nodes) == 0 {
 		return ""
 	}
 
 	labelNames := make([]string, 0, len(issue.Labels.Nodes))
 	for _, label := range issue.Labels.Nodes {
-		labelNames = append(labelNames, cs.HexToRGB(label.Color, label.Name))
+		if colorize {
+			labelNames = append(labelNames, cs.HexToRGB(label.Color, label.Name))
+		} else {
+			labelNames = append(labelNames, label.Name)
+		}
 	}
 
 	return strings.Join(labelNames, ", ")

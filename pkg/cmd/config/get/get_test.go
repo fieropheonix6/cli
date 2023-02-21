@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/cli/cli/internal/config"
-	"github.com/cli/cli/pkg/cmdutil"
-	"github.com/cli/cli/pkg/iostreams"
+	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
 )
@@ -42,7 +42,7 @@ func TestNewCmdConfigGet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &cmdutil.Factory{
 				Config: func() (config.Config, error) {
-					return config.ConfigStub{}, nil
+					return config.NewBlankConfig(), nil
 				},
 			}
 
@@ -86,9 +86,11 @@ func Test_getRun(t *testing.T) {
 			name: "get key",
 			input: &GetOptions{
 				Key: "editor",
-				Config: config.ConfigStub{
-					"editor": "ed",
-				},
+				Config: func() config.Config {
+					cfg := config.NewBlankConfig()
+					cfg.Set("", "editor", "ed")
+					return cfg
+				}(),
 			},
 			stdout: "ed\n",
 		},
@@ -97,26 +99,26 @@ func Test_getRun(t *testing.T) {
 			input: &GetOptions{
 				Hostname: "github.com",
 				Key:      "editor",
-				Config: config.ConfigStub{
-					"editor":            "ed",
-					"github.com:editor": "vim",
-				},
+				Config: func() config.Config {
+					cfg := config.NewBlankConfig()
+					cfg.Set("", "editor", "ed")
+					cfg.Set("github.com", "editor", "vim")
+					return cfg
+				}(),
 			},
 			stdout: "vim\n",
 		},
 	}
 
 	for _, tt := range tests {
-		io, _, stdout, stderr := iostreams.Test()
-		tt.input.IO = io
+		ios, _, stdout, stderr := iostreams.Test()
+		tt.input.IO = ios
 
 		t.Run(tt.name, func(t *testing.T) {
 			err := getRun(tt.input)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.stdout, stdout.String())
 			assert.Equal(t, tt.stderr, stderr.String())
-			_, err = tt.input.Config.Get("", "_written")
-			assert.Error(t, err)
 		})
 	}
 }

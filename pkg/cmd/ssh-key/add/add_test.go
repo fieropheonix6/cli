@@ -4,17 +4,17 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/cli/cli/internal/config"
-	"github.com/cli/cli/pkg/httpmock"
-	"github.com/cli/cli/pkg/iostreams"
+	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_runAdd(t *testing.T) {
-	io, stdin, stdout, stderr := iostreams.Test()
-	io.SetStdinTTY(false)
-	io.SetStdoutTTY(true)
-	io.SetStderrTTY(true)
+	ios, stdin, stdout, stderr := iostreams.Test()
+	ios.SetStdinTTY(false)
+	ios.SetStdoutTTY(true)
+	ios.SetStderrTTY(true)
 
 	stdin.WriteString("PUBKEY")
 
@@ -26,7 +26,7 @@ func Test_runAdd(t *testing.T) {
 		httpmock.StringResponse(`{}`))
 
 	err := runAdd(&AddOptions{
-		IO: io,
+		IO: ios,
 		Config: func() (config.Config, error) {
 			return config.NewBlankConfig(), nil
 		},

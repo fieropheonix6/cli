@@ -2,22 +2,24 @@ package list
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
+	"net/http"
 	"testing"
 
+	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/internal/ghrepo"
+	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
+	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/cli/cli/api"
-	"github.com/cli/cli/internal/ghrepo"
-	prShared "github.com/cli/cli/pkg/cmd/pr/shared"
-	"github.com/cli/cli/pkg/httpmock"
 )
 
 func TestIssueList(t *testing.T) {
-	http := &httpmock.Registry{}
-	client := api.NewClient(api.ReplaceTripper(http))
+	reg := &httpmock.Registry{}
+	httpClient := &http.Client{}
+	httpmock.ReplaceTripper(httpClient, reg)
+	client := api.NewClientFromHTTP(httpClient)
 
-	http.Register(
+	reg.Register(
 		httpmock.GraphQL(`query IssueList\b`),
 		httpmock.StringResponse(`
 			{ "data": { "repository": {
@@ -32,7 +34,7 @@ func TestIssueList(t *testing.T) {
 			} } }
 		`),
 	)
-	http.Register(
+	reg.Register(
 		httpmock.GraphQL(`query IssueList\b`),
 		httpmock.StringResponse(`
 			{ "data": { "repository": {
@@ -58,15 +60,15 @@ func TestIssueList(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(http.Requests) != 2 {
-		t.Fatalf("expected 2 HTTP requests, seen %d", len(http.Requests))
+	if len(reg.Requests) != 2 {
+		t.Fatalf("expected 2 HTTP requests, seen %d", len(reg.Requests))
 	}
 	var reqBody struct {
 		Query     string
 		Variables map[string]interface{}
 	}
 
-	bodyBytes, _ := ioutil.ReadAll(http.Requests[0].Body)
+	bodyBytes, _ := io.ReadAll(reg.Requests[0].Body)
 	_ = json.Unmarshal(bodyBytes, &reqBody)
 	if reqLimit := reqBody.Variables["limit"].(float64); reqLimit != 100 {
 		t.Errorf("expected 100, got %v", reqLimit)
@@ -75,7 +77,7 @@ func TestIssueList(t *testing.T) {
 		t.Error("did not expect first request to pass 'endCursor'")
 	}
 
-	bodyBytes, _ = ioutil.ReadAll(http.Requests[1].Body)
+	bodyBytes, _ = io.ReadAll(reg.Requests[1].Body)
 	_ = json.Unmarshal(bodyBytes, &reqBody)
 	if endCursor := reqBody.Variables["endCursor"].(string); endCursor != "ENDCURSOR" {
 		t.Errorf("expected %q, got %q", "ENDCURSOR", endCursor)
@@ -83,10 +85,12 @@ func TestIssueList(t *testing.T) {
 }
 
 func TestIssueList_pagination(t *testing.T) {
-	http := &httpmock.Registry{}
-	client := api.NewClient(api.ReplaceTripper(http))
+	reg := &httpmock.Registry{}
+	httpClient := &http.Client{}
+	httpmock.ReplaceTripper(httpClient, reg)
+	client := api.NewClientFromHTTP(httpClient)
 
-	http.Register(
+	reg.Register(
 		httpmock.GraphQL(`query IssueList\b`),
 		httpmock.StringResponse(`
 			{ "data": { "repository": {
@@ -109,7 +113,7 @@ func TestIssueList_pagination(t *testing.T) {
 			`),
 	)
 
-	http.Register(
+	reg.Register(
 		httpmock.GraphQL(`query IssueList\b`),
 		httpmock.StringResponse(`
 			{ "data": { "repository": {

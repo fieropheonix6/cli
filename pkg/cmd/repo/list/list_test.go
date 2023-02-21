@@ -2,20 +2,23 @@ package list
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/cli/cli/internal/config"
-	"github.com/cli/cli/pkg/cmdutil"
-	"github.com/cli/cli/pkg/httpmock"
-	"github.com/cli/cli/pkg/iostreams"
-	"github.com/cli/cli/test"
 	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/cli/cli/v2/internal/config"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
+	"github.com/cli/cli/v2/pkg/cmdutil"
+	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/test"
 )
 
 func TestNewCmdList(t *testing.T) {
@@ -35,6 +38,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -49,6 +53,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -63,13 +68,14 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
 		},
 		{
 			name: "only public",
-			cli:  "--public",
+			cli:  "--visibility=public",
 			wants: ListOptions{
 				Limit:       30,
 				Owner:       "",
@@ -77,13 +83,14 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
 		},
 		{
 			name: "only private",
-			cli:  "--private",
+			cli:  "--visibility=private",
 			wants: ListOptions{
 				Limit:       30,
 				Owner:       "",
@@ -91,6 +98,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -105,6 +113,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        true,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -119,6 +128,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      true,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -133,6 +143,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "go",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -147,6 +158,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    true,
 				NonArchived: false,
 			},
@@ -161,14 +173,45 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: true,
 			},
 		},
 		{
-			name:     "no public and private",
-			cli:      "--public --private",
-			wantsErr: "specify only one of `--public` or `--private`",
+			name: "with topic",
+			cli:  "--topic cli",
+			wants: ListOptions{
+				Limit:       30,
+				Owner:       "",
+				Visibility:  "",
+				Fork:        false,
+				Source:      false,
+				Language:    "",
+				Topic:       []string{"cli"},
+				Archived:    false,
+				NonArchived: false,
+			},
+		},
+		{
+			name: "with multiple topic",
+			cli:  "--topic cli --topic multiple-topic",
+			wants: ListOptions{
+				Limit:       30,
+				Owner:       "",
+				Visibility:  "",
+				Fork:        false,
+				Source:      false,
+				Language:    "",
+				Topic:       []string{"cli", "multiple-topic"},
+				Archived:    false,
+				NonArchived: false,
+			},
+		},
+		{
+			name:     "invalid visibility",
+			cli:      "--visibility=bad",
+			wantsErr: "invalid argument \"bad\" for \"--visibility\" flag: valid values are {public|private|internal}",
 		},
 		{
 			name:     "no forks with sources",
@@ -220,6 +263,7 @@ func TestNewCmdList(t *testing.T) {
 			assert.Equal(t, tt.wants.Owner, gotOpts.Owner)
 			assert.Equal(t, tt.wants.Visibility, gotOpts.Visibility)
 			assert.Equal(t, tt.wants.Fork, gotOpts.Fork)
+			assert.Equal(t, tt.wants.Topic, gotOpts.Topic)
 			assert.Equal(t, tt.wants.Source, gotOpts.Source)
 			assert.Equal(t, tt.wants.Archived, gotOpts.Archived)
 			assert.Equal(t, tt.wants.NonArchived, gotOpts.NonArchived)
@@ -228,13 +272,13 @@ func TestNewCmdList(t *testing.T) {
 }
 
 func runCommand(rt http.RoundTripper, isTTY bool, cli string) (*test.CmdOut, error) {
-	io, _, stdout, stderr := iostreams.Test()
-	io.SetStdoutTTY(isTTY)
-	io.SetStdinTTY(isTTY)
-	io.SetStderrTTY(isTTY)
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(isTTY)
+	ios.SetStdinTTY(isTTY)
+	ios.SetStderrTTY(isTTY)
 
 	factory := &cmdutil.Factory{
-		IOStreams: io,
+		IOStreams: ios,
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: rt}, nil
 		},
@@ -252,8 +296,8 @@ func runCommand(rt http.RoundTripper, isTTY bool, cli string) (*test.CmdOut, err
 	cmd.SetArgs(argv)
 
 	cmd.SetIn(&bytes.Buffer{})
-	cmd.SetOut(ioutil.Discard)
-	cmd.SetErr(ioutil.Discard)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
 
 	_, err = cmd.ExecuteC()
 	return &test.CmdOut{
@@ -263,10 +307,10 @@ func runCommand(rt http.RoundTripper, isTTY bool, cli string) (*test.CmdOut, err
 }
 
 func TestRepoList_nontty(t *testing.T) {
-	io, _, stdout, stderr := iostreams.Test()
-	io.SetStdoutTTY(false)
-	io.SetStdinTTY(false)
-	io.SetStderrTTY(false)
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(false)
+	ios.SetStdinTTY(false)
+	ios.SetStderrTTY(false)
 
 	httpReg := &httpmock.Registry{}
 	defer httpReg.Verify(t)
@@ -277,7 +321,7 @@ func TestRepoList_nontty(t *testing.T) {
 	)
 
 	opts := ListOptions{
-		IO: io,
+		IO: ios,
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: httpReg}, nil
 		},
@@ -304,10 +348,10 @@ func TestRepoList_nontty(t *testing.T) {
 }
 
 func TestRepoList_tty(t *testing.T) {
-	io, _, stdout, stderr := iostreams.Test()
-	io.SetStdoutTTY(true)
-	io.SetStdinTTY(true)
-	io.SetStderrTTY(true)
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(true)
+	ios.SetStdinTTY(true)
+	ios.SetStderrTTY(true)
 
 	httpReg := &httpmock.Registry{}
 	defer httpReg.Verify(t)
@@ -318,7 +362,7 @@ func TestRepoList_tty(t *testing.T) {
 	)
 
 	opts := ListOptions{
-		IO: io,
+		IO: ios,
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: httpReg}, nil
 		},
@@ -359,11 +403,52 @@ func TestRepoList_filtering(t *testing.T) {
 		}),
 	)
 
-	output, err := runCommand(http, true, `--private --limit 2 `)
+	output, err := runCommand(http, true, `--visibility=private --limit 2 `)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	assert.Equal(t, "", output.Stderr())
 	assert.Equal(t, "\nNo results match your search\n\n", output.String())
+}
+
+func TestRepoList_noVisibilityField(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(false)
+	ios.SetStdinTTY(false)
+	ios.SetStderrTTY(false)
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.GraphQL(`query RepositoryList\b`),
+		httpmock.GraphQLQuery(`{"data":{"repositoryOwner":{"login":"octocat","repositories":{"totalCount":0}}}}`,
+			func(query string, params map[string]interface{}) {
+				assert.False(t, strings.Contains(query, "visibility"))
+			},
+		),
+	)
+
+	opts := ListOptions{
+		IO: ios,
+		HttpClient: func() (*http.Client, error) {
+			return &http.Client{Transport: reg}, nil
+		},
+		Config: func() (config.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+		Now: func() time.Time {
+			t, _ := time.Parse(time.RFC822, "19 Feb 21 15:00 UTC")
+			return t
+		},
+		Limit:    30,
+		Detector: &fd.DisabledDetectorMock{},
+	}
+
+	err := listRun(&opts)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "", stderr.String())
+	assert.Equal(t, "", stdout.String())
 }

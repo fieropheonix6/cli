@@ -2,13 +2,13 @@ package gist
 
 import (
 	"github.com/MakeNowJust/heredoc"
-	gistCloneCmd "github.com/cli/cli/pkg/cmd/gist/clone"
-	gistCreateCmd "github.com/cli/cli/pkg/cmd/gist/create"
-	gistDeleteCmd "github.com/cli/cli/pkg/cmd/gist/delete"
-	gistEditCmd "github.com/cli/cli/pkg/cmd/gist/edit"
-	gistListCmd "github.com/cli/cli/pkg/cmd/gist/list"
-	gistViewCmd "github.com/cli/cli/pkg/cmd/gist/view"
-	"github.com/cli/cli/pkg/cmdutil"
+	gistCloneCmd "github.com/cli/cli/v2/pkg/cmd/gist/clone"
+	gistCreateCmd "github.com/cli/cli/v2/pkg/cmd/gist/create"
+	gistDeleteCmd "github.com/cli/cli/v2/pkg/cmd/gist/delete"
+	gistEditCmd "github.com/cli/cli/v2/pkg/cmd/gist/edit"
+	gistListCmd "github.com/cli/cli/v2/pkg/cmd/gist/list"
+	gistViewCmd "github.com/cli/cli/v2/pkg/cmd/gist/view"
+	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
 
@@ -18,13 +18,13 @@ func NewCmdGist(f *cmdutil.Factory) *cobra.Command {
 		Short: "Manage gists",
 		Long:  `Work with GitHub gists.`,
 		Annotations: map[string]string{
-			"IsCore": "true",
 			"help:arguments": heredoc.Doc(`
 				A gist can be supplied as argument in either of the following formats:
 				- by ID, e.g. 5b0e0062eb8e9654adad7bb1d81cc75f
 				- by URL, e.g. "https://gist.github.com/OWNER/5b0e0062eb8e9654adad7bb1d81cc75f"
 			`),
 		},
+		GroupID: "core",
 	}
 
 	cmd.AddCommand(gistCloneCmd.NewCmdClone(f, nil))

@@ -2,7 +2,6 @@ package iostreams
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -25,36 +24,18 @@ var (
 	}
 )
 
-func EnvColorDisabled() bool {
-	return os.Getenv("NO_COLOR") != "" || os.Getenv("CLICOLOR") == "0"
-}
-
-func EnvColorForced() bool {
-	return os.Getenv("CLICOLOR_FORCE") != "" && os.Getenv("CLICOLOR_FORCE") != "0"
-}
-
-func Is256ColorSupported() bool {
-	term := os.Getenv("TERM")
-	colorterm := os.Getenv("COLORTERM")
-
-	return strings.Contains(term, "256") ||
-		strings.Contains(term, "24bit") ||
-		strings.Contains(term, "truecolor") ||
-		strings.Contains(colorterm, "256") ||
-		strings.Contains(colorterm, "24bit") ||
-		strings.Contains(colorterm, "truecolor")
-}
-
-func NewColorScheme(enabled, is256enabled bool) *ColorScheme {
+func NewColorScheme(enabled, is256enabled bool, trueColor bool) *ColorScheme {
 	return &ColorScheme{
 		enabled:      enabled,
 		is256enabled: is256enabled,
+		hasTrueColor: trueColor,
 	}
 }
 
 type ColorScheme struct {
 	enabled      bool
 	is256enabled bool
+	hasTrueColor bool
 }
 
 func (c *ColorScheme) Bold(t string) string {
@@ -204,8 +185,17 @@ func (c *ColorScheme) ColorFromString(s string) func(string) string {
 	return fn
 }
 
+// ColorFromRGB returns a function suitable for TablePrinter.AddField
+// that calls HexToRGB, coloring text if supported by the terminal.
+func (c *ColorScheme) ColorFromRGB(hex string) func(string) string {
+	return func(s string) string {
+		return c.HexToRGB(hex, s)
+	}
+}
+
+// HexToRGB uses the given hex to color x if supported by the terminal.
 func (c *ColorScheme) HexToRGB(hex string, x string) string {
-	if !c.enabled || !c.is256enabled {
+	if !c.enabled || !c.hasTrueColor || len(hex) != 6 {
 		return x
 	}
 

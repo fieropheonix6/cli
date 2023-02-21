@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/cli/cli/internal/config"
-	"github.com/cli/cli/pkg/findsh"
+	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/pkg/findsh"
 	"github.com/google/shlex"
 )
 
@@ -23,13 +23,10 @@ func ExpandAlias(cfg config.Config, args []string, findShFunc func() (string, er
 	}
 	expanded = args[1:]
 
-	aliases, err := cfg.Aliases()
-	if err != nil {
-		return
-	}
+	aliases := cfg.Aliases()
 
-	expansion, ok := aliases.Get(args[1])
-	if !ok {
+	expansion, getErr := aliases.Get(args[1])
+	if getErr != nil {
 		return
 	}
 
