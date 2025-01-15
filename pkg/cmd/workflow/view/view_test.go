@@ -176,10 +176,11 @@ func TestViewRun(t *testing.T) {
 
 		Total runs 10
 		Recent runs
-		X  cool commit  a workflow  trunk  push  1
-		*  cool commit  a workflow  trunk  push  2
-		✓  cool commit  a workflow  trunk  push  3
-		X  cool commit  a workflow  trunk  push  4
+		   TITLE        WORKFLOW    BRANCH  EVENT  ID
+		X  cool commit  a workflow  trunk   push   1
+		*  cool commit  a workflow  trunk   push   2
+		✓  cool commit  a workflow  trunk   push   3
+		X  cool commit  a workflow  trunk   push   4
 
 		To see more runs for this workflow, try: gh run list --workflow flow.yml
 		To see the YAML for this workflow, try: gh workflow view flow.yml --yaml
@@ -221,7 +222,7 @@ func TestViewRun(t *testing.T) {
 					httpmock.JSONResponse(aWorkflow),
 				)
 			},
-			wantOut: "Opening github.com/OWNER/REPO/actions/workflows/flow.yml in your browser.\n",
+			wantOut: "Opening https://github.com/OWNER/REPO/actions/workflows/flow.yml in your browser.\n",
 		},
 		{
 			name: "web notty",
@@ -256,7 +257,7 @@ func TestViewRun(t *testing.T) {
 					httpmock.StringResponse(`{ "data": { "repository": { "defaultBranchRef": { "name": "trunk" } } } }`),
 				)
 			},
-			wantOut: "Opening github.com/OWNER/REPO/blob/trunk/.github/workflows/flow.yml in your browser.\n",
+			wantOut: "Opening https://github.com/OWNER/REPO/blob/trunk/.github/workflows/flow.yml in your browser.\n",
 		},
 		{
 			name: "web with yaml and ref",
@@ -273,7 +274,7 @@ func TestViewRun(t *testing.T) {
 					httpmock.JSONResponse(aWorkflow),
 				)
 			},
-			wantOut: "Opening github.com/OWNER/REPO/blob/base/.github/workflows/flow.yml in your browser.\n",
+			wantOut: "Opening https://github.com/OWNER/REPO/blob/base/.github/workflows/flow.yml in your browser.\n",
 		},
 		{
 			name: "workflow with yaml",

@@ -1,6 +1,7 @@
 package download
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
@@ -28,6 +32,7 @@ type DownloadOptions struct {
 	TagName           string
 	FilePatterns      []string
 	Destination       string
+	OutputFile        string
 
 	// maximum number of simultaneous downloads
 	Concurrency int
@@ -44,12 +49,13 @@ func NewCmdDownload(f *cmdutil.Factory, runF func(*DownloadOptions) error) *cobr
 	cmd := &cobra.Command{
 		Use:   "download [<tag>]",
 		Short: "Download release assets",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Download assets from a GitHub release.
 
 			Without an explicit tag name argument, assets are downloaded from the
-			latest release in the project. In this case, '--pattern' is required.
-		`),
+			latest release in the project. In this case, %[1]s--pattern%[1]s or %[1]s--archive%[1]s
+			is required.
+		`, "`"),
 		Example: heredoc.Doc(`
 			# download all assets from a specific release
 			$ gh release download v1.2.3
@@ -80,6 +86,10 @@ func NewCmdDownload(f *cmdutil.Factory, runF func(*DownloadOptions) error) *cobr
 				return err
 			}
 
+			if err := cmdutil.MutuallyExclusive("specify only one of `--dir` or `--output`", opts.Destination != ".", opts.OutputFile != ""); err != nil {
+				return err
+			}
+
 			// check archive type option validity
 			if err := checkArchiveTypeOption(opts); err != nil {
 				return err
@@ -94,7 +104,8 @@ func NewCmdDownload(f *cmdutil.Factory, runF func(*DownloadOptions) error) *cobr
 		},
 	}
 
-	cmd.Flags().StringVarP(&opts.Destination, "dir", "D", ".", "The directory to download files into")
+	cmd.Flags().StringVarP(&opts.OutputFile, "output", "O", "", "The `file` to write a single asset to (use \"-\" to write to standard output)")
+	cmd.Flags().StringVarP(&opts.Destination, "dir", "D", ".", "The `directory` to download files into")
 	cmd.Flags().StringArrayVarP(&opts.FilePatterns, "pattern", "p", nil, "Download only assets that match a glob pattern")
 	cmd.Flags().StringVarP(&opts.ArchiveType, "archive", "A", "", "Download the source code archive in the specified `format` (zip or tar.gz)")
 	cmd.Flags().BoolVar(&opts.OverwriteExisting, "clobber", false, "Overwrite existing files of the same name")
@@ -133,17 +144,19 @@ func downloadRun(opts *DownloadOptions) error {
 		return err
 	}
 
-	opts.IO.StartProgressIndicator()
+	opts.IO.StartProgressIndicatorWithLabel("Finding assets to download")
 	defer opts.IO.StopProgressIndicator()
+
+	ctx := context.Background()
 
 	var release *shared.Release
 	if opts.TagName == "" {
-		release, err = shared.FetchLatestRelease(httpClient, baseRepo)
+		release, err = shared.FetchLatestRelease(ctx, httpClient, baseRepo)
 		if err != nil {
 			return err
 		}
 	} else {
-		release, err = shared.FetchRelease(httpClient, baseRepo, opts.TagName)
+		release, err = shared.FetchRelease(ctx, httpClient, baseRepo, opts.TagName)
 		if err != nil {
 			return err
 		}
@@ -164,6 +177,12 @@ func downloadRun(opts *DownloadOptions) error {
 			if len(opts.FilePatterns) > 0 && !matchAny(opts.FilePatterns, a.Name) {
 				continue
 			}
+			// Note that if we need to start checking for reserved filenames on
+			// more operating systems we should move to using a build constraints
+			// pattern rather than checking the operating system at runtime.
+			if runtime.GOOS == "windows" && isWindowsReservedFilename(a.Name) {
+				return fmt.Errorf("unable to download release due to asset with reserved filename %q", a.Name)
+			}
 			toDownload = append(toDownload, a)
 		}
 	}
@@ -175,14 +194,19 @@ func downloadRun(opts *DownloadOptions) error {
 		return errors.New("no assets to download")
 	}
 
-	if opts.Destination != "." {
-		err := os.MkdirAll(opts.Destination, 0755)
-		if err != nil {
-			return err
-		}
+	if len(toDownload) > 1 && opts.OutputFile != "" {
+		return fmt.Errorf("unable to write more than one asset with `--output`, got %d assets", len(toDownload))
 	}
 
-	return downloadAssets(httpClient, toDownload, opts.Destination, opts.Concurrency, isArchive, opts.OverwriteExisting, opts.SkipExisting)
+	dest := destinationWriter{
+		file:         opts.OutputFile,
+		dir:          opts.Destination,
+		skipExisting: opts.SkipExisting,
+		overwrite:    opts.OverwriteExisting,
+		stdout:       opts.IO.Out,
+	}
+
+	return downloadAssets(&dest, httpClient, toDownload, opts.Concurrency, isArchive, opts.IO)
 }
 
 func matchAny(patterns []string, name string) bool {
@@ -194,7 +218,7 @@ func matchAny(patterns []string, name string) bool {
 	return false
 }
 
-func downloadAssets(httpClient *http.Client, toDownload []shared.ReleaseAsset, destDir string, numWorkers int, isArchive, force, skip bool) error {
+func downloadAssets(dest *destinationWriter, httpClient *http.Client, toDownload []shared.ReleaseAsset, numWorkers int, isArchive bool, io *iostreams.IOStreams) error {
 	if numWorkers == 0 {
 		return errors.New("the number of concurrent workers needs to be greater than 0")
 	}
@@ -209,7 +233,8 @@ func downloadAssets(httpClient *http.Client, toDownload []shared.ReleaseAsset, d
 	for w := 1; w <= numWorkers; w++ {
 		go func() {
 			for a := range jobs {
-				results <- downloadAsset(httpClient, a.APIURL, destDir, a.Name, isArchive, force, skip)
+				io.StartProgressIndicatorWithLabel(fmt.Sprintf("Downloading %s", a.Name))
+				results <- downloadAsset(dest, httpClient, a.APIURL, a.Name, isArchive)
 			}
 		}()
 	}
@@ -221,20 +246,19 @@ func downloadAssets(httpClient *http.Client, toDownload []shared.ReleaseAsset, d
 
 	var downloadError error
 	for i := 0; i < len(toDownload); i++ {
-		if err := <-results; err != nil {
+		if err := <-results; err != nil && !errors.Is(err, errSkipped) {
 			downloadError = err
 		}
 	}
 
+	io.StopProgressIndicator()
+
 	return downloadError
 }
 
-func downloadAsset(httpClient *http.Client, assetURL, destinationDir string, fileName string, isArchive, force, skip bool) error {
-	var destinationPath = filepath.Join(destinationDir, fileName)
-	if len(fileName) != 0 {
-		if success, err := shouldWrite(destinationPath, force, skip); !success || err != nil {
-			return err
-		}
+func downloadAsset(dest *destinationWriter, httpClient *http.Client, assetURL, fileName string, isArchive bool) error {
+	if err := dest.Check(fileName); err != nil {
+		return err
 	}
 
 	req, err := http.NewRequest("GET", assetURL, nil)
@@ -276,24 +300,13 @@ func downloadAsset(httpClient *http.Client, assetURL, destinationDir string, fil
 			return fmt.Errorf("unable to parse file name of archive: %w", err)
 		}
 		if serverFileName, ok := params["filename"]; ok {
-			destinationPath = filepath.Join(destinationDir, serverFileName)
+			fileName = filepath.Base(serverFileName)
 		} else {
 			return errors.New("unable to determine file name of archive")
 		}
-
-		if success, err := shouldWrite(destinationPath, force, skip); !success || err != nil {
-			return err
-		}
 	}
 
-	f, err := os.OpenFile(destinationPath, os.O_WRONLY|os.O_CREATE, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = io.Copy(f, resp.Body)
-	return err
+	return dest.Copy(fileName, resp.Body)
 }
 
 var codeloadLegacyRE = regexp.MustCompile(`^(/[^/]+/[^/]+/)legacy\.`)
@@ -302,25 +315,108 @@ var codeloadLegacyRE = regexp.MustCompile(`^(/[^/]+/[^/]+/)legacy\.`)
 // when you choose to download "Source code (zip/tar.gz)" from a tagged release on the web. The legacy URLs
 // look like this:
 //
-//   https://codeload.github.com/OWNER/REPO/legacy.zip/refs/tags/TAGNAME
+//	https://codeload.github.com/OWNER/REPO/legacy.zip/refs/tags/TAGNAME
 //
 // Removing the "legacy." part results in a valid Codeload URL for our desired archive format.
 func removeLegacyFromCodeloadPath(p string) string {
 	return codeloadLegacyRE.ReplaceAllString(p, "$1")
 }
 
-// shouldWrite determines if writing to the dest should continue based on force and skip parameters.
-func shouldWrite(dest string, force, skip bool) (bool, error) {
-	if _, err := os.Stat(dest); err == nil {
-		if skip {
-			return false, nil
+var errSkipped = errors.New("skipped")
+
+// destinationWriter handles writing content into destination files
+type destinationWriter struct {
+	file         string
+	dir          string
+	skipExisting bool
+	overwrite    bool
+	stdout       io.Writer
+}
+
+func (w destinationWriter) makePath(name string) string {
+	if w.file == "" {
+		return filepath.Join(w.dir, name)
+	}
+	return w.file
+}
+
+// Check returns an error if a file already exists at destination
+func (w destinationWriter) Check(name string) error {
+	if name == "" {
+		// skip check as file name will only be known after the API request
+		return nil
+	}
+	fp := w.makePath(name)
+	if fp == "-" {
+		// writing to stdout should always proceed
+		return nil
+	}
+	return w.check(fp)
+}
+
+func (w destinationWriter) check(fp string) error {
+	if _, err := os.Stat(fp); err == nil {
+		if w.skipExisting {
+			return errSkipped
 		}
-		if !force {
-			return false, fmt.Errorf(
+		if !w.overwrite {
+			return fmt.Errorf(
 				"%s already exists (use `--clobber` to overwrite file or `--skip-existing` to skip file)",
-				dest,
+				fp,
 			)
 		}
 	}
-	return true, nil
+	return nil
+}
+
+// Copy writes the data from r into a file specified by name.
+func (w destinationWriter) Copy(name string, r io.Reader) (copyErr error) {
+	fp := w.makePath(name)
+	if fp == "-" {
+		_, copyErr = io.Copy(w.stdout, r)
+		return
+	}
+	if copyErr = w.check(fp); copyErr != nil {
+		return
+	}
+
+	if dir := filepath.Dir(fp); dir != "." {
+		if copyErr = os.MkdirAll(dir, 0755); copyErr != nil {
+			return
+		}
+	}
+
+	var f *os.File
+	if f, copyErr = os.OpenFile(fp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644); copyErr != nil {
+		return
+	}
+
+	defer func() {
+		if err := f.Close(); copyErr == nil && err != nil {
+			copyErr = err
+		}
+	}()
+
+	_, copyErr = io.Copy(f, r)
+	return
+}
+
+func isWindowsReservedFilename(filename string) bool {
+	// Windows terminals should prevent the creation of these files
+	// but that behavior is not enforced across terminals. Prevent
+	// the user from downloading files with these reserved names as
+	// they represent an exploit vector for bad actors.
+	// Reserved filenames defined at:
+	// https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file#win32-file-namespaces
+	reservedFilenames := []string{"CON", "PRN", "AUX", "NUL", "COM0",
+		"COM1", "COM2", "COM3", "COM4", "COM5",
+		"COM6", "COM7", "COM8", "COM9", "COM¹",
+		"COM²", "COM³", "LPT0", "LPT1", "LPT2",
+		"LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
+		"LPT8", "LPT9", "LPT¹", "LPT²", "LPT³"}
+
+	// Normalize type case and remove file type extension from filename.
+	filename = strings.ToUpper(strings.Split(filename, ".")[0])
+
+	return slices.Contains(reservedFilenames, filename)
 }

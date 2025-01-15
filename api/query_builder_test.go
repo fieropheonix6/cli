@@ -21,7 +21,7 @@ func TestPullRequestGraphQL(t *testing.T) {
 		{
 			name:   "fields with nested structures",
 			fields: []string{"author", "assignees"},
-			want:   "author{login},assignees(first:100){nodes{id,login,name},totalCount}",
+			want:   "author{login,...on User{id,name}},assignees(first:100){nodes{id,login,name},totalCount}",
 		},
 		{
 			name:   "compressed query",
@@ -32,6 +32,11 @@ func TestPullRequestGraphQL(t *testing.T) {
 			name:   "invalid fields",
 			fields: []string{"isPinned", "stateReason", "number"},
 			want:   "number",
+		},
+		{
+			name:   "projectItems",
+			fields: []string{"projectItems"},
+			want:   `projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount}`,
 		},
 	}
 	for _, tt := range tests {
@@ -62,12 +67,17 @@ func TestIssueGraphQL(t *testing.T) {
 		{
 			name:   "fields with nested structures",
 			fields: []string{"author", "assignees"},
-			want:   "author{login},assignees(first:100){nodes{id,login,name},totalCount}",
+			want:   "author{login,...on User{id,name}},assignees(first:100){nodes{id,login,name},totalCount}",
 		},
 		{
 			name:   "compressed query",
 			fields: []string{"files"},
 			want:   "files(first: 100) {nodes {additions,deletions,path}}",
+		},
+		{
+			name:   "projectItems",
+			fields: []string{"projectItems"},
+			want:   `projectItems(first:100){nodes{id, project{id,title}, status:fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue{optionId,name}}},totalCount}`,
 		},
 	}
 	for _, tt := range tests {

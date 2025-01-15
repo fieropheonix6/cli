@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/spf13/cobra"
@@ -11,7 +12,7 @@ import (
 
 type ListOptions struct {
 	IO     *iostreams.IOStreams
-	Config func() (config.Config, error)
+	Config func() (gh.Config, error)
 
 	Hostname string
 }
@@ -51,17 +52,11 @@ func listRun(opts *ListOptions) error {
 	if opts.Hostname != "" {
 		host = opts.Hostname
 	} else {
-		host, _ = cfg.DefaultHost()
+		host, _ = cfg.Authentication().DefaultHost()
 	}
 
-	configOptions := config.ConfigOptions()
-
-	for _, key := range configOptions {
-		val, err := cfg.GetOrDefault(host, key.Key)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(opts.IO.Out, "%s=%s\n", key.Key, val)
+	for _, option := range config.Options {
+		fmt.Fprintf(opts.IO.Out, "%s=%s\n", option.Key, option.CurrentValue(cfg, host))
 	}
 
 	return nil

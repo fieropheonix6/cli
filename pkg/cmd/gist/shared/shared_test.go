@@ -1,8 +1,14 @@
 package shared
 
 import (
+	"fmt"
+	"net/http"
 	"testing"
+	"time"
 
+	"github.com/cli/cli/v2/internal/prompter"
+	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -83,5 +89,106 @@ func TestIsBinaryContents(t *testing.T) {
 
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, IsBinaryContents(tt.fileContent))
+	}
+}
+
+func TestPromptGists(t *testing.T) {
+	sixHours, _ := time.ParseDuration("6h")
+	sixHoursAgo := time.Now().Add(-sixHours)
+	sixHoursAgoFormatted := sixHoursAgo.Format(time.RFC3339Nano)
+
+	tests := []struct {
+		name          string
+		prompterStubs func(pm *prompter.MockPrompter)
+		response      string
+		wantOut       Gist
+		wantErr       bool
+	}{
+		{
+			name: "multiple files, select first gist",
+			prompterStubs: func(pm *prompter.MockPrompter) {
+				pm.RegisterSelect("Select a gist",
+					[]string{"cool.txt  about 6 hours ago", "gistfile0.txt  about 6 hours ago"},
+					func(_, _ string, opts []string) (int, error) {
+						return prompter.IndexFor(opts, "cool.txt  about 6 hours ago")
+					})
+			},
+			response: `{ "data": { "viewer": { "gists": { "nodes": [
+							{
+								"name": "1234",
+								"files": [{ "name": "cool.txt" }],
+								"description": "",
+								"updatedAt": "%[1]v",
+								"isPublic": true
+							},
+							{
+								"name": "5678",
+								"files": [{ "name": "gistfile0.txt" }],
+								"description": "",
+								"updatedAt": "%[1]v",
+								"isPublic": true
+							}
+						] } } } }`,
+			wantOut: Gist{ID: "1234", Files: map[string]*GistFile{"cool.txt": {Filename: "cool.txt"}}, UpdatedAt: sixHoursAgo, Public: true},
+		},
+		{
+			name: "multiple files, select second gist",
+			prompterStubs: func(pm *prompter.MockPrompter) {
+				pm.RegisterSelect("Select a gist",
+					[]string{"cool.txt  about 6 hours ago", "gistfile0.txt  about 6 hours ago"},
+					func(_, _ string, opts []string) (int, error) {
+						return prompter.IndexFor(opts, "gistfile0.txt  about 6 hours ago")
+					})
+			},
+			response: `{ "data": { "viewer": { "gists": { "nodes": [
+							{
+								"name": "1234",
+								"files": [{ "name": "cool.txt" }],
+								"description": "",
+								"updatedAt": "%[1]v",
+								"isPublic": true
+							},
+							{
+								"name": "5678",
+								"files": [{ "name": "gistfile0.txt" }],
+								"description": "",
+								"updatedAt": "%[1]v",
+								"isPublic": true
+							}
+						] } } } }`,
+			wantOut: Gist{ID: "5678", Files: map[string]*GistFile{"gistfile0.txt": {Filename: "gistfile0.txt"}}, UpdatedAt: sixHoursAgo, Public: true},
+		},
+		{
+			name:     "no files",
+			response: `{ "data": { "viewer": { "gists": { "nodes": [] } } } }`,
+			wantOut:  Gist{},
+		},
+	}
+
+	ios, _, _, _ := iostreams.Test()
+
+	for _, tt := range tests {
+		reg := &httpmock.Registry{}
+		const query = `query GistList\b`
+		reg.Register(
+			httpmock.GraphQL(query),
+			httpmock.StringResponse(fmt.Sprintf(
+				tt.response,
+				sixHoursAgoFormatted,
+			)),
+		)
+		client := &http.Client{Transport: reg}
+
+		t.Run(tt.name, func(t *testing.T) {
+			mockPrompter := prompter.NewMockPrompter(t)
+			if tt.prompterStubs != nil {
+				tt.prompterStubs(mockPrompter)
+			}
+
+			gist, err := PromptGists(mockPrompter, client, "github.com", ios.ColorScheme())
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantOut.ID, gist.ID)
+			reg.Verify(t)
+		})
 	}
 }

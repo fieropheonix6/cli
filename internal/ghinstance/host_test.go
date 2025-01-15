@@ -6,87 +6,43 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestIsEnterprise(t *testing.T) {
+func TestTenantName(t *testing.T) {
 	tests := []struct {
-		host string
-		want bool
+		host       string
+		wantTenant string
+		wantFound  bool
 	}{
 		{
-			host: "github.com",
-			want: false,
+			host:       "github.com",
+			wantTenant: "github.com",
 		},
 		{
-			host: "api.github.com",
-			want: false,
+			host:       "github.localhost",
+			wantTenant: "github.localhost",
 		},
 		{
-			host: "github.localhost",
-			want: false,
+			host:       "garage.github.com",
+			wantTenant: "github.com",
 		},
 		{
-			host: "api.github.localhost",
-			want: false,
+			host:       "ghe.com",
+			wantTenant: "ghe.com",
 		},
 		{
-			host: "ghe.io",
-			want: true,
+			host:       "tenant.ghe.com",
+			wantTenant: "tenant",
+			wantFound:  true,
 		},
 		{
-			host: "example.com",
-			want: true,
+			host:       "api.tenant.ghe.com",
+			wantTenant: "tenant",
+			wantFound:  true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.host, func(t *testing.T) {
-			if got := IsEnterprise(tt.host); got != tt.want {
-				t.Errorf("IsEnterprise() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeHostname(t *testing.T) {
-	tests := []struct {
-		host string
-		want string
-	}{
-		{
-			host: "GitHub.com",
-			want: "github.com",
-		},
-		{
-			host: "api.github.com",
-			want: "github.com",
-		},
-		{
-			host: "ssh.github.com",
-			want: "github.com",
-		},
-		{
-			host: "upload.github.com",
-			want: "github.com",
-		},
-		{
-			host: "GitHub.localhost",
-			want: "github.localhost",
-		},
-		{
-			host: "api.github.localhost",
-			want: "github.localhost",
-		},
-		{
-			host: "GHE.IO",
-			want: "ghe.io",
-		},
-		{
-			host: "git.my.org",
-			want: "git.my.org",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.host, func(t *testing.T) {
-			if got := NormalizeHostname(tt.host); got != tt.want {
-				t.Errorf("NormalizeHostname() = %v, want %v", got, tt.want)
+			if tenant, found := TenantName(tt.host); tenant != tt.wantTenant || found != tt.wantFound {
+				t.Errorf("TenantName(%v) = %v %v, want %v %v", tt.host, tenant, found, tt.wantTenant, tt.wantFound)
 			}
 		})
 	}
@@ -131,6 +87,7 @@ func TestHostnameValidator(t *testing.T) {
 		})
 	}
 }
+
 func TestGraphQLEndpoint(t *testing.T) {
 	tests := []struct {
 		host string
@@ -145,8 +102,16 @@ func TestGraphQLEndpoint(t *testing.T) {
 			want: "http://api.github.localhost/graphql",
 		},
 		{
+			host: "garage.github.com",
+			want: "https://garage.github.com/api/graphql",
+		},
+		{
 			host: "ghe.io",
 			want: "https://ghe.io/api/graphql",
+		},
+		{
+			host: "tenant.ghe.com",
+			want: "https://api.tenant.ghe.com/graphql",
 		},
 	}
 	for _, tt := range tests {
@@ -172,8 +137,16 @@ func TestRESTPrefix(t *testing.T) {
 			want: "http://api.github.localhost/",
 		},
 		{
+			host: "garage.github.com",
+			want: "https://garage.github.com/api/v3/",
+		},
+		{
 			host: "ghe.io",
 			want: "https://ghe.io/api/v3/",
+		},
+		{
+			host: "tenant.ghe.com",
+			want: "https://api.tenant.ghe.com/",
 		},
 	}
 	for _, tt := range tests {

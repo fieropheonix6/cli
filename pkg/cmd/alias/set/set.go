@@ -6,22 +6,24 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
+	"github.com/cli/cli/v2/pkg/cmd/alias/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/google/shlex"
 	"github.com/spf13/cobra"
 )
 
 type SetOptions struct {
-	Config func() (config.Config, error)
+	Config func() (gh.Config, error)
 	IO     *iostreams.IOStreams
 
-	Name      string
-	Expansion string
-	IsShell   bool
+	Name              string
+	Expansion         string
+	IsShell           bool
+	OverwriteExisting bool
 
-	validCommand func(string) bool
+	validAliasName      func(string) bool
+	validAliasExpansion func(string) bool
 }
 
 func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command {
@@ -33,21 +35,21 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 	cmd := &cobra.Command{
 		Use:   "set <alias> <expansion>",
 		Short: "Create a shortcut for a gh command",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Define a word that will expand to a full gh command when invoked.
 
 			The expansion may specify additional arguments and flags. If the expansion includes
-			positional placeholders such as "$1", extra arguments that follow the alias will be
+			positional placeholders such as %[1]s$1%[1]s, extra arguments that follow the alias will be
 			inserted appropriately. Otherwise, extra arguments will be appended to the expanded
 			command.
 
-			Use "-" as expansion argument to read the expansion string from standard input. This
+			Use %[1]s-%[1]s as expansion argument to read the expansion string from standard input. This
 			is useful to avoid quoting issues when defining expansions.
 
-			If the expansion starts with "!" or if "--shell" was given, the expansion is a shell
-			expression that will be evaluated through the "sh" interpreter when the alias is
+			If the expansion starts with %[1]s!%[1]s or if %[1]s--shell%[1]s was given, the expansion is a shell
+			expression that will be evaluated through the %[1]ssh%[1]s interpreter when the alias is
 			invoked. This allows for chaining multiple commands via piping and redirection.
-		`),
+		`, "`"),
 		Example: heredoc.Doc(`
 			# note: Command Prompt on Windows requires using double quotes for arguments
 			$ gh alias set pv 'pr view'
@@ -58,6 +60,9 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 
 			$ gh alias set homework 'issue list --assignee @me'
 			$ gh homework
+
+			$ gh alias set 'issue mine' 'issue list --mention @me'
+			$ gh issue mine
 
 			$ gh alias set epicsBy 'issue list --author="$1" --label="epic"'
 			$ gh epicsBy vilmibm  #=> gh issue list --author="vilmibm" --label="epic"
@@ -70,34 +75,19 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 			opts.Name = args[0]
 			opts.Expansion = args[1]
 
-			opts.validCommand = func(args string) bool {
-				split, err := shlex.Split(args)
-				if err != nil {
-					return false
-				}
-
-				rootCmd := cmd.Root()
-				cmd, _, err := rootCmd.Traverse(split)
-				if err == nil && cmd != rootCmd {
-					return true
-				}
-
-				for _, ext := range f.ExtensionManager.List() {
-					if ext.Name() == split[0] {
-						return true
-					}
-				}
-				return false
-			}
+			opts.validAliasName = shared.ValidAliasNameFunc(cmd)
+			opts.validAliasExpansion = shared.ValidAliasExpansionFunc(cmd)
 
 			if runF != nil {
 				return runF(opts)
 			}
+
 			return setRun(opts)
 		},
 	}
 
 	cmd.Flags().BoolVarP(&opts.IsShell, "shell", "s", false, "Declare an alias to be passed through a shell interpreter")
+	cmd.Flags().BoolVar(&opts.OverwriteExisting, "clobber", false, "Overwrite existing aliases of the same name")
 
 	return cmd
 }
@@ -116,33 +106,39 @@ func setRun(opts *SetOptions) error {
 		return fmt.Errorf("did not understand expansion: %w", err)
 	}
 
-	isTerminal := opts.IO.IsStdoutTTY()
-	if isTerminal {
-		fmt.Fprintf(opts.IO.ErrOut, "- Adding alias for %s: %s\n", cs.Bold(opts.Name), cs.Bold(expansion))
-	}
-
-	isShell := opts.IsShell
-	if isShell && !strings.HasPrefix(expansion, "!") {
+	if opts.IsShell && !strings.HasPrefix(expansion, "!") {
 		expansion = "!" + expansion
 	}
-	isShell = strings.HasPrefix(expansion, "!")
 
-	if opts.validCommand(opts.Name) {
-		return fmt.Errorf("could not create alias: %q is already a gh command", opts.Name)
+	isTerminal := opts.IO.IsStdoutTTY()
+	if isTerminal {
+		fmt.Fprintf(opts.IO.ErrOut, "- Creating alias for %s: %s\n", cs.Bold(opts.Name), cs.Bold(expansion))
 	}
 
-	if !isShell && !opts.validCommand(expansion) {
-		return fmt.Errorf("could not create alias: %s does not correspond to a gh command", expansion)
+	var existingAlias bool
+	if _, err := aliasCfg.Get(opts.Name); err == nil {
+		existingAlias = true
 	}
 
-	successMsg := fmt.Sprintf("%s Added alias.", cs.SuccessIcon())
-	if oldExpansion, err := aliasCfg.Get(opts.Name); err == nil {
-		successMsg = fmt.Sprintf("%s Changed alias %s from %s to %s",
-			cs.SuccessIcon(),
-			cs.Bold(opts.Name),
-			cs.Bold(oldExpansion),
-			cs.Bold(expansion),
-		)
+	if !opts.validAliasName(opts.Name) {
+		if !existingAlias {
+			return fmt.Errorf("%s Could not create alias %s: already a gh command or extension",
+				cs.FailureIcon(),
+				cs.Bold(opts.Name))
+		}
+
+		if existingAlias && !opts.OverwriteExisting {
+			return fmt.Errorf("%s Could not create alias %s: name already taken, use the --clobber flag to overwrite it",
+				cs.FailureIcon(),
+				cs.Bold(opts.Name),
+			)
+		}
+	}
+
+	if !opts.validAliasExpansion(expansion) {
+		return fmt.Errorf("%s Could not create alias %s: expansion does not correspond to a gh command, extension, or alias",
+			cs.FailureIcon(),
+			cs.Bold(opts.Name))
 	}
 
 	aliasCfg.Add(opts.Name, expansion)
@@ -150,6 +146,13 @@ func setRun(opts *SetOptions) error {
 	err = cfg.Write()
 	if err != nil {
 		return err
+	}
+
+	successMsg := fmt.Sprintf("%s Added alias %s", cs.SuccessIcon(), cs.Bold(opts.Name))
+	if existingAlias && opts.OverwriteExisting {
+		successMsg = fmt.Sprintf("%s Changed alias %s",
+			cs.WarningIcon(),
+			cs.Bold(opts.Name))
 	}
 
 	if isTerminal {

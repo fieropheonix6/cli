@@ -18,12 +18,17 @@ type Stub struct {
 	matched   bool
 	Matcher   Matcher
 	Responder Responder
+	exclude   bool
 }
 
 func MatchAny(*http.Request) bool {
 	return true
 }
 
+// REST returns a matcher to a request for the HTTP method and URL escaped path p.
+// For example, to match a GET request to `/api/v3/repos/octocat/hello-world/`
+// use REST("GET", "api/v3/repos/octocat/hello-world")
+// To match a GET request to `/user` use REST("GET", "user")
 func REST(method, p string) Matcher {
 	return func(req *http.Request) bool {
 		if !strings.EqualFold(req.Method, method) {
@@ -50,6 +55,33 @@ func GraphQL(q string) Matcher {
 		_ = decodeJSONBody(req, &bodyData)
 
 		return re.MatchString(bodyData.Query)
+	}
+}
+
+func GraphQLMutationMatcher(q string, cb func(map[string]interface{}) bool) Matcher {
+	re := regexp.MustCompile(q)
+
+	return func(req *http.Request) bool {
+		if !strings.EqualFold(req.Method, "POST") {
+			return false
+		}
+		if req.URL.Path != "/graphql" && req.URL.Path != "/api/graphql" {
+			return false
+		}
+
+		var bodyData struct {
+			Query     string
+			Variables struct {
+				Input map[string]interface{}
+			}
+		}
+		_ = decodeJSONBody(req, &bodyData)
+
+		if re.MatchString(bodyData.Query) {
+			return cb(bodyData.Variables.Input)
+		}
+
+		return false
 	}
 }
 
@@ -92,6 +124,15 @@ func StringResponse(body string) Responder {
 	}
 }
 
+func WithHost(matcher Matcher, host string) Matcher {
+	return func(req *http.Request) bool {
+		if !strings.EqualFold(req.Host, host) {
+			return false
+		}
+		return matcher(req)
+	}
+}
+
 func WithHeader(responder Responder, header string, value string) Responder {
 	return func(req *http.Request) (*http.Response, error) {
 		resp, _ := responder(req)
@@ -112,7 +153,20 @@ func StatusStringResponse(status int, body string) Responder {
 func JSONResponse(body interface{}) Responder {
 	return func(req *http.Request) (*http.Response, error) {
 		b, _ := json.Marshal(body)
-		return httpResponse(200, req, bytes.NewBuffer(b)), nil
+		header := http.Header{
+			"Content-Type": []string{"application/json"},
+		}
+		return httpResponseWithHeader(200, req, bytes.NewBuffer(b), header), nil
+	}
+}
+
+func StatusJSONResponse(status int, body interface{}) Responder {
+	return func(req *http.Request) (*http.Response, error) {
+		b, _ := json.Marshal(body)
+		header := http.Header{
+			"Content-Type": []string{"application/json"},
+		}
+		return httpResponseWithHeader(status, req, bytes.NewBuffer(b), header), nil
 	}
 }
 
@@ -137,6 +191,7 @@ func RESTPayload(responseStatus int, responseBody string, cb func(payload map[st
 		return httpResponse(responseStatus, req, bytes.NewBufferString(responseBody)), nil
 	}
 }
+
 func GraphQLMutation(body string, cb func(map[string]interface{})) Responder {
 	return func(req *http.Request) (*http.Response, error) {
 		var bodyData struct {
@@ -170,10 +225,16 @@ func GraphQLQuery(body string, cb func(string, map[string]interface{})) Responde
 	}
 }
 
+// ScopesResponder returns a response with a 200 status code and the given OAuth scopes.
 func ScopesResponder(scopes string) func(*http.Request) (*http.Response, error) {
+	return StatusScopesResponder(http.StatusOK, scopes)
+}
+
+// StatusScopesResponder returns a response with the given status code and OAuth scopes.
+func StatusScopesResponder(status int, scopes string) func(*http.Request) (*http.Response, error) {
 	return func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
-			StatusCode: 200,
+			StatusCode: status,
 			Request:    req,
 			Header: map[string][]string{
 				"X-Oauth-Scopes": {scopes},
@@ -184,10 +245,14 @@ func ScopesResponder(scopes string) func(*http.Request) (*http.Response, error) 
 }
 
 func httpResponse(status int, req *http.Request, body io.Reader) *http.Response {
+	return httpResponseWithHeader(status, req, body, http.Header{})
+}
+
+func httpResponseWithHeader(status int, req *http.Request, body io.Reader, header http.Header) *http.Response {
 	return &http.Response{
 		StatusCode: status,
 		Request:    req,
 		Body:       io.NopCloser(body),
-		Header:     http.Header{},
+		Header:     header,
 	}
 }

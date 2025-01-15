@@ -6,6 +6,8 @@ import (
 
 	"github.com/cli/cli/v2/git"
 	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
+	ghmock "github.com/cli/cli/v2/internal/gh/mock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,7 +21,7 @@ func Test_remoteResolver(t *testing.T) {
 	tests := []struct {
 		name     string
 		remotes  func() (git.RemoteSet, error)
-		config   config.Config
+		config   gh.Config
 		output   []string
 		wantsErr bool
 	}{
@@ -30,13 +32,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://github.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "github.com", "default"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{})
+					authCfg.SetDefaultHost("github.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -47,13 +49,13 @@ func Test_remoteResolver(t *testing.T) {
 			remotes: func() (git.RemoteSet, error) {
 				return git.RemoteSet{}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "example.com", "hosts"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("example.com", "hosts")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -66,16 +68,14 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://test.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "example.com", "hosts"
-				}
-				cfg.AuthTokenFunc = func(string) (string, string) {
-					return "", ""
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetActiveToken("", "")
+					authCfg.SetDefaultHost("example.com", "hosts")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -88,13 +88,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://github.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "example.com", "hosts"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("example.com", "hosts")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -107,13 +107,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://example.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "example.com", "default"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("example.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -129,13 +129,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("fork", "https://example.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "example.com", "default"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("example.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -148,16 +148,14 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://test.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com", "github.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "github.com", "default"
-				}
-				cfg.AuthTokenFunc = func(string) (string, string) {
-					return "", ""
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com", "github.com"})
+					authCfg.SetActiveToken("", "")
+					authCfg.SetDefaultHost("example.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -171,13 +169,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://example.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com", "github.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "github.com", "default"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com", "github.com"})
+					authCfg.SetDefaultHost("github.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -194,13 +192,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("test", "https://test.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com", "github.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "github.com", "default"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com", "github.com"})
+					authCfg.SetDefaultHost("github.com", "default")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -213,13 +211,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://example.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "test.com", "GH_HOST"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("test.com", "GH_HOST")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -233,13 +231,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://test.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "test.com", "GH_HOST"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com"})
+					authCfg.SetDefaultHost("test.com", "GH_HOST")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -254,13 +252,13 @@ func Test_remoteResolver(t *testing.T) {
 					git.NewRemote("origin", "https://test.com/owner/repo.git"),
 				}, nil
 			},
-			config: func() config.Config {
-				cfg := &config.ConfigMock{}
-				cfg.HostsFunc = func() []string {
-					return []string{"example.com", "test.com"}
-				}
-				cfg.DefaultHostFunc = func() (string, string) {
-					return "test.com", "GH_HOST"
+			config: func() gh.Config {
+				cfg := &ghmock.ConfigMock{}
+				cfg.AuthenticationFunc = func() gh.AuthConfig {
+					authCfg := &config.AuthConfig{}
+					authCfg.SetHosts([]string{"example.com", "test.com"})
+					authCfg.SetDefaultHost("test.com", "GH_HOST")
+					return authCfg
 				}
 				return cfg
 			}(),
@@ -272,7 +270,7 @@ func Test_remoteResolver(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rr := &remoteResolver{
 				readRemotes:   tt.remotes,
-				getConfig:     func() (config.Config, error) { return tt.config, nil },
+				getConfig:     func() (gh.Config, error) { return tt.config, nil },
 				urlTranslator: identityTranslator{},
 			}
 			resolver := rr.Resolver()

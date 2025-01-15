@@ -16,7 +16,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/browser"
-	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmd/gist/shared"
@@ -34,7 +34,7 @@ type CreateOptions struct {
 	FilenameOverride string
 	WebMode          bool
 
-	Config     func() (config.Config, error)
+	Config     func() (gh.Config, error)
 	HttpClient func() (*http.Client, error)
 	Browser    browser.Browser
 }
@@ -50,14 +50,14 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 	cmd := &cobra.Command{
 		Use:   "create [<filename>... | -]",
 		Short: "Create a new gist",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Create a new GitHub gist with given contents.
 
-			Gists can be created from one or multiple files. Alternatively, pass "-" as
+			Gists can be created from one or multiple files. Alternatively, pass %[1]s-%[1]s as
 			file name to read from standard input.
 
-			By default, gists are secret; use '--public' to make publicly listed ones.
-		`),
+			By default, gists are secret; use %[1]s--public%[1]s to make publicly listed ones.
+		`, "`"),
 		Example: heredoc.Doc(`
 			# publish file 'hello.py' as a public gist
 			$ gh gist create --public hello.py
@@ -96,7 +96,7 @@ func NewCmdCreate(f *cmdutil.Factory, runF func(*CreateOptions) error) *cobra.Co
 
 	cmd.Flags().StringVarP(&opts.Description, "desc", "d", "", "A description for this gist")
 	cmd.Flags().BoolVarP(&opts.WebMode, "web", "w", false, "Open the web browser with created gist")
-	cmd.Flags().BoolVarP(&opts.Public, "public", "p", false, "List the gist publicly (default: secret)")
+	cmd.Flags().BoolVarP(&opts.Public, "public", "p", false, "List the gist publicly (default \"secret\")")
 	cmd.Flags().StringVarP(&opts.FilenameOverride, "filename", "f", "", "Provide a filename to be used when reading from standard input")
 	return cmd
 }
@@ -112,25 +112,18 @@ func createRun(opts *CreateOptions) error {
 		return fmt.Errorf("failed to collect files for posting: %w", err)
 	}
 
+	errOut := opts.IO.ErrOut
 	cs := opts.IO.ColorScheme()
 	gistName := guessGistName(files)
 
 	processMessage := "Creating gist..."
-	completionMessage := "Created gist"
 	if gistName != "" {
 		if len(files) > 1 {
 			processMessage = "Creating gist with multiple files"
 		} else {
 			processMessage = fmt.Sprintf("Creating gist %s", gistName)
 		}
-		if opts.Public {
-			completionMessage = fmt.Sprintf("Created %s gist %s", cs.Red("public"), gistName)
-		} else {
-			completionMessage = fmt.Sprintf("Created %s gist %s", cs.Green("secret"), gistName)
-		}
 	}
-
-	errOut := opts.IO.ErrOut
 	fmt.Fprintf(errOut, "%s %s\n", cs.Gray("-"), processMessage)
 
 	httpClient, err := opts.HttpClient()
@@ -143,7 +136,7 @@ func createRun(opts *CreateOptions) error {
 		return err
 	}
 
-	host, _ := cfg.DefaultHost()
+	host, _ := cfg.Authentication().DefaultHost()
 
 	opts.IO.StartProgressIndicator()
 	gist, err := createGist(httpClient, host, opts.Description, opts.Public, files)
@@ -161,6 +154,13 @@ func createRun(opts *CreateOptions) error {
 		return fmt.Errorf("%s Failed to create gist: %w", cs.Red("X"), err)
 	}
 
+	completionMessage := fmt.Sprintf("Created %s gist", cs.Green("secret"))
+	if opts.Public {
+		completionMessage = fmt.Sprintf("Created %s gist", cs.Red("public"))
+	}
+	if gistName != "" {
+		completionMessage += " " + gistName
+	}
 	fmt.Fprintf(errOut, "%s %s\n", cs.SuccessIconWithColor(cs.Green), completionMessage)
 
 	if opts.WebMode {

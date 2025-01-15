@@ -1,14 +1,18 @@
 package shared
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/authflow"
+	"github.com/cli/cli/v2/internal/browser"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/pkg/cmd/ssh-key/add"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -18,22 +22,24 @@ import (
 const defaultSSHKeyTitle = "GitHub CLI"
 
 type iconfig interface {
-	Get(string, string) (string, error)
-	Set(string, string, string)
-	Write() error
+	Login(string, string, string, string, bool) (bool, error)
+	UsersForHost(string) []string
 }
 
 type LoginOptions struct {
-	IO          *iostreams.IOStreams
-	Config      iconfig
-	HTTPClient  *http.Client
-	Hostname    string
-	Interactive bool
-	Web         bool
-	Scopes      []string
-	Executable  string
-	GitProtocol string
-	Prompter    Prompt
+	IO               *iostreams.IOStreams
+	Config           iconfig
+	HTTPClient       *http.Client
+	Hostname         string
+	Interactive      bool
+	Web              bool
+	Scopes           []string
+	GitProtocol      string
+	Prompter         Prompt
+	Browser          browser.Browser
+	CredentialFlow   *GitCredentialFlow
+	SecureStorage    bool
+	SkipSSHKeyPrompt bool
 
 	sshContext ssh.Context
 }
@@ -51,7 +57,7 @@ func Login(opts *LoginOptions) error {
 			"SSH",
 		}
 		result, err := opts.Prompter.Select(
-			"What is your preferred protocol for Git operations?",
+			"What is your preferred protocol for Git operations on this host?",
 			options[0],
 			options)
 		if err != nil {
@@ -63,17 +69,16 @@ func Login(opts *LoginOptions) error {
 
 	var additionalScopes []string
 
-	credentialFlow := &GitCredentialFlow{Executable: opts.Executable, Prompter: opts.Prompter}
 	if opts.Interactive && gitProtocol == "https" {
-		if err := credentialFlow.Prompt(hostname); err != nil {
+		if err := opts.CredentialFlow.Prompt(hostname); err != nil {
 			return err
 		}
-		additionalScopes = append(additionalScopes, credentialFlow.Scopes()...)
+		additionalScopes = append(additionalScopes, opts.CredentialFlow.Scopes()...)
 	}
 
 	var keyToUpload string
 	keyTitle := defaultSSHKeyTitle
-	if opts.Interactive && gitProtocol == "ssh" {
+	if opts.Interactive && !opts.SkipSSHKeyPrompt && gitProtocol == "ssh" {
 		pubKeys, err := opts.sshContext.LocalPublicKeys()
 		if err != nil {
 			return err
@@ -99,7 +104,7 @@ func Login(opts *LoginOptions) error {
 
 			if sshChoice {
 				passphrase, err := opts.Prompter.Password(
-					"Enter a passphrase for your new SSH key (Optional)")
+					"Enter a passphrase for your new SSH key (Optional):")
 				if err != nil {
 					return err
 				}
@@ -139,24 +144,24 @@ func Login(opts *LoginOptions) error {
 	}
 
 	var authToken string
-	userValidated := false
+	var username string
 
 	if authMode == 0 {
 		var err error
-		authToken, err = authflow.AuthFlowWithConfig(cfg, opts.IO, hostname, "", append(opts.Scopes, additionalScopes...), opts.Interactive)
+		authToken, username, err = authflow.AuthFlow(hostname, opts.IO, "", append(opts.Scopes, additionalScopes...), opts.Interactive, opts.Browser)
 		if err != nil {
 			return fmt.Errorf("failed to authenticate via web browser: %w", err)
 		}
 		fmt.Fprintf(opts.IO.ErrOut, "%s Authentication complete.\n", cs.SuccessIcon())
-		userValidated = true
 	} else {
 		minimumScopes := append([]string{"repo", "read:org"}, additionalScopes...)
 		fmt.Fprint(opts.IO.ErrOut, heredoc.Docf(`
 			Tip: you can generate a Personal Access Token here https://%s/settings/tokens
 			The minimum required scopes are %s.
-		`, hostname, scopesSentence(minimumScopes, ghinstance.IsEnterprise(hostname))))
+		`, hostname, scopesSentence(minimumScopes)))
 
-		authToken, err := opts.Prompter.AuthToken()
+		var err error
+		authToken, err = opts.Prompter.AuthToken()
 		if err != nil {
 			return err
 		}
@@ -164,72 +169,111 @@ func Login(opts *LoginOptions) error {
 		if err := HasMinimumScopes(httpClient, hostname, authToken); err != nil {
 			return fmt.Errorf("error validating token: %w", err)
 		}
-
-		cfg.Set(hostname, "oauth_token", authToken)
 	}
 
-	var username string
-	if userValidated {
-		username, _ = cfg.Get(hostname, "user")
-	} else {
-		apiClient := api.NewClientFromHTTP(httpClient)
+	if username == "" {
 		var err error
-		username, err = api.CurrentLoginName(apiClient, hostname)
+		username, err = GetCurrentLogin(httpClient, hostname, authToken)
 		if err != nil {
-			return fmt.Errorf("error using api: %w", err)
+			return fmt.Errorf("error retrieving current user: %w", err)
 		}
-
-		cfg.Set(hostname, "user", username)
 	}
+
+	// Get these users before adding the new one, so that we can
+	// check whether the user was already logged in later.
+	//
+	// In this case we ignore the error if the host doesn't exist
+	// because that can occur when the user is logging into a host
+	// for the first time.
+	usersForHost := cfg.UsersForHost(hostname)
+	userWasAlreadyLoggedIn := slices.Contains(usersForHost, username)
 
 	if gitProtocol != "" {
 		fmt.Fprintf(opts.IO.ErrOut, "- gh config set -h %s git_protocol %s\n", hostname, gitProtocol)
-		cfg.Set(hostname, "git_protocol", gitProtocol)
 		fmt.Fprintf(opts.IO.ErrOut, "%s Configured git protocol\n", cs.SuccessIcon())
 	}
 
-	err := cfg.Write()
+	insecureStorageUsed, err := cfg.Login(hostname, username, authToken, gitProtocol, opts.SecureStorage)
 	if err != nil {
 		return err
 	}
+	if insecureStorageUsed {
+		fmt.Fprintf(opts.IO.ErrOut, "%s Authentication credentials saved in plain text\n", cs.Yellow("!"))
+	}
 
-	if credentialFlow.ShouldSetup() {
-		err := credentialFlow.Setup(hostname, username, authToken)
+	if opts.CredentialFlow.ShouldSetup() {
+		err := opts.CredentialFlow.Setup(hostname, username, authToken)
 		if err != nil {
 			return err
 		}
 	}
 
 	if keyToUpload != "" {
-		err := sshKeyUpload(httpClient, hostname, keyToUpload, keyTitle)
+		uploaded, err := sshKeyUpload(httpClient, hostname, keyToUpload, keyTitle)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(opts.IO.ErrOut, "%s Uploaded the SSH key to your GitHub account: %s\n", cs.SuccessIcon(), cs.Bold(keyToUpload))
+
+		if uploaded {
+			fmt.Fprintf(opts.IO.ErrOut, "%s Uploaded the SSH key to your GitHub account: %s\n", cs.SuccessIcon(), cs.Bold(keyToUpload))
+		} else {
+			fmt.Fprintf(opts.IO.ErrOut, "%s SSH key already existed on your GitHub account: %s\n", cs.SuccessIcon(), cs.Bold(keyToUpload))
+		}
 	}
 
 	fmt.Fprintf(opts.IO.ErrOut, "%s Logged in as %s\n", cs.SuccessIcon(), cs.Bold(username))
+	if userWasAlreadyLoggedIn {
+		fmt.Fprintf(opts.IO.ErrOut, "%s You were already logged in to this account\n", cs.WarningIcon())
+	}
+
 	return nil
 }
 
-func scopesSentence(scopes []string, isEnterprise bool) string {
+func scopesSentence(scopes []string) string {
 	quoted := make([]string, len(scopes))
 	for i, s := range scopes {
 		quoted[i] = fmt.Sprintf("'%s'", s)
-		if s == "workflow" && isEnterprise {
-			// remove when GHE 2.x reaches EOL
-			quoted[i] += " (GHE 3.0+)"
-		}
 	}
 	return strings.Join(quoted, ", ")
 }
 
-func sshKeyUpload(httpClient *http.Client, hostname, keyFile string, title string) error {
+func sshKeyUpload(httpClient *http.Client, hostname, keyFile string, title string) (bool, error) {
 	f, err := os.Open(keyFile)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer f.Close()
 
 	return add.SSHKeyUpload(httpClient, hostname, f, title)
+}
+
+func GetCurrentLogin(httpClient httpClient, hostname, authToken string) (string, error) {
+	query := `query UserCurrent{viewer{login}}`
+	reqBody, err := json.Marshal(map[string]interface{}{"query": query})
+	if err != nil {
+		return "", err
+	}
+	result := struct {
+		Data struct{ Viewer struct{ Login string } }
+	}{}
+	apiEndpoint := ghinstance.GraphQLEndpoint(hostname)
+	req, err := http.NewRequest("POST", apiEndpoint, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "token "+authToken)
+	res, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode > 299 {
+		return "", api.HandleHTTPError(res)
+	}
+	decoder := json.NewDecoder(res.Body)
+	err = decoder.Decode(&result)
+	if err != nil {
+		return "", err
+	}
+	return result.Data.Viewer.Login, nil
 }

@@ -27,6 +27,10 @@ func WithPrAndIssueQueryParams(client *api.Client, baseRepo ghrepo.Interface, ba
 	if len(state.Assignees) > 0 {
 		q.Set("assignees", strings.Join(state.Assignees, ","))
 	}
+	// Set a template parameter if no body parameter is provided e.g. Web Mode
+	if len(state.Template) > 0 && len(state.Body) == 0 {
+		q.Set("template", state.Template)
+	}
 	if len(state.Labels) > 0 {
 		q.Set("labels", strings.Join(state.Labels, ","))
 	}
@@ -40,6 +44,7 @@ func WithPrAndIssueQueryParams(client *api.Client, baseRepo ghrepo.Interface, ba
 	if len(state.Milestones) > 0 {
 		q.Set("milestone", state.Milestones[0])
 	}
+
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -109,11 +114,12 @@ func AddMetadataToIssueParams(client *api.Client, baseRepo ghrepo.Interface, par
 	}
 	params["labelIds"] = labelIDs
 
-	projectIDs, err := tb.MetadataResult.ProjectsToIDs(tb.Projects)
+	projectIDs, projectV2IDs, err := tb.MetadataResult.ProjectsToIDs(tb.Projects)
 	if err != nil {
 		return fmt.Errorf("could not add to project: %w", err)
 	}
 	params["projectIds"] = projectIDs
+	params["projectV2Ids"] = projectV2IDs
 
 	if len(tb.Milestones) > 0 {
 		milestoneID, err := tb.MetadataResult.MilestoneToID(tb.Milestones[0])

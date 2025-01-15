@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/cli/v2/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +18,12 @@ type ListOptions struct {
 	IO         *iostreams.IOStreams
 	BaseRepo   func() (ghrepo.Interface, error)
 
-	LimitResults  int
-	ExcludeDrafts bool
+	Exporter cmdutil.Exporter
+
+	LimitResults       int
+	ExcludeDrafts      bool
+	ExcludePreReleases bool
+	Order              string
 }
 
 func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Command {
@@ -46,6 +50,9 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 
 	cmd.Flags().IntVarP(&opts.LimitResults, "limit", "L", 30, "Maximum number of items to fetch")
 	cmd.Flags().BoolVar(&opts.ExcludeDrafts, "exclude-drafts", false, "Exclude draft releases")
+	cmd.Flags().BoolVar(&opts.ExcludePreReleases, "exclude-pre-releases", false, "Exclude pre-releases")
+	cmdutil.StringEnumFlag(cmd, &opts.Order, "order", "O", "desc", []string{"asc", "desc"}, "Order of releases returned")
+	cmdutil.AddJSONFlags(cmd, &opts.Exporter, releaseFields)
 
 	return cmd
 }
@@ -61,12 +68,12 @@ func listRun(opts *ListOptions) error {
 		return err
 	}
 
-	releases, err := fetchReleases(httpClient, baseRepo, opts.LimitResults, opts.ExcludeDrafts)
+	releases, err := fetchReleases(httpClient, baseRepo, opts.LimitResults, opts.ExcludeDrafts, opts.ExcludePreReleases, opts.Order)
 	if err != nil {
 		return err
 	}
 
-	if len(releases) == 0 {
+	if len(releases) == 0 && opts.Exporter == nil {
 		return cmdutil.NewNoResultsError("no releases found")
 	}
 
@@ -76,14 +83,18 @@ func listRun(opts *ListOptions) error {
 		fmt.Fprintf(opts.IO.ErrOut, "failed to start pager: %v\n", err)
 	}
 
-	table := utils.NewTablePrinter(opts.IO)
+	if opts.Exporter != nil {
+		return opts.Exporter.Write(opts.IO, releases)
+	}
+
+	table := tableprinter.New(opts.IO, tableprinter.WithHeader("Title", "Type", "Tag name", "Published"))
 	iofmt := opts.IO.ColorScheme()
 	for _, rel := range releases {
 		title := text.RemoveExcessiveWhitespace(rel.Name)
 		if title == "" {
 			title = rel.TagName
 		}
-		table.AddField(title, nil, nil)
+		table.AddField(title)
 
 		badge := ""
 		var badgeColor func(string) string
@@ -97,23 +108,15 @@ func listRun(opts *ListOptions) error {
 			badge = "Pre-release"
 			badgeColor = iofmt.Yellow
 		}
-		table.AddField(badge, nil, badgeColor)
+		table.AddField(badge, tableprinter.WithColor(badgeColor))
 
-		tagName := rel.TagName
-		if table.IsTTY() {
-			tagName = fmt.Sprintf("(%s)", tagName)
-		}
-		table.AddField(tagName, nil, nil)
+		table.AddField(rel.TagName, tableprinter.WithTruncate(nil))
 
 		pubDate := rel.PublishedAt
 		if rel.PublishedAt.IsZero() {
 			pubDate = rel.CreatedAt
 		}
-		publishedAt := pubDate.Format(time.RFC3339)
-		if table.IsTTY() {
-			publishedAt = text.FuzzyAgo(time.Now(), pubDate)
-		}
-		table.AddField(publishedAt, nil, iofmt.Gray)
+		table.AddTimeField(time.Now(), pubDate, iofmt.Gray)
 		table.EndRow()
 	}
 	err = table.Render()

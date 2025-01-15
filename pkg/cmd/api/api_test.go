@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
-	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +16,12 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/git"
 	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
+	ghmock "github.com/cli/cli/v2/internal/gh/mock"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/go-gh/pkg/template"
+	"github.com/cli/go-gh/v2/pkg/template"
 	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +54,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -72,6 +76,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -93,6 +98,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -114,6 +120,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -135,6 +142,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -156,6 +164,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -182,6 +191,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -208,6 +218,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -234,6 +245,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -255,6 +267,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            time.Minute * 5,
 				Template:            "",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -276,6 +289,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "hello {{.name}}",
 				FilterOutput:        "",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -297,6 +311,7 @@ func Test_NewCmdApi(t *testing.T) {
 				CacheTTL:            0,
 				Template:            "",
 				FilterOutput:        ".name",
+				Verbose:             false,
 			},
 			wantsErr: false,
 		},
@@ -314,6 +329,43 @@ func Test_NewCmdApi(t *testing.T) {
 			name:     "--jq with --template",
 			cli:      "user --jq .foo -t '{{.foo}}'",
 			wantsErr: true,
+		},
+		{
+			name:     "--slurp without --paginate",
+			cli:      "user --slurp",
+			wantsErr: true,
+		},
+		{
+			name:     "slurp with --jq",
+			cli:      "user --paginate --slurp --jq .foo",
+			wantsErr: true,
+		},
+		{
+			name:     "slurp with --template",
+			cli:      "user --paginate --slurp --template '{{.foo}}'",
+			wantsErr: true,
+		},
+		{
+			name: "with verbose",
+			cli:  "user --verbose",
+			wants: ApiOptions{
+				Hostname:            "",
+				RequestMethod:       "GET",
+				RequestMethodPassed: false,
+				RequestPath:         "user",
+				RequestInputFile:    "",
+				RawFields:           []string(nil),
+				MagicFields:         []string(nil),
+				RequestHeaders:      []string(nil),
+				ShowResponseHeaders: false,
+				Paginate:            false,
+				Silent:              false,
+				CacheTTL:            0,
+				Template:            "",
+				FilterOutput:        "",
+				Verbose:             true,
+			},
+			wantsErr: false,
 		},
 	}
 	for _, tt := range tests {
@@ -351,8 +403,23 @@ func Test_NewCmdApi(t *testing.T) {
 			assert.Equal(t, tt.wants.CacheTTL, opts.CacheTTL)
 			assert.Equal(t, tt.wants.Template, opts.Template)
 			assert.Equal(t, tt.wants.FilterOutput, opts.FilterOutput)
+			assert.Equal(t, tt.wants.Verbose, opts.Verbose)
 		})
 	}
+}
+
+func Test_NewCmdApi_WindowsAbsPath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.SkipNow()
+	}
+
+	cmd := NewCmdApi(&cmdutil.Factory{}, func(opts *ApiOptions) error {
+		return nil
+	})
+
+	cmd.SetArgs([]string{`C:\users\repos`})
+	_, err := cmd.ExecuteC()
+	assert.EqualError(t, err, `invalid API endpoint: "C:\users\repos". Your shell might be rewriting URL paths as filesystem paths. To avoid this, omit the leading slash from the endpoint argument`)
 }
 
 func Test_apiRun(t *testing.T) {
@@ -363,6 +430,7 @@ func Test_apiRun(t *testing.T) {
 		err          error
 		stdout       string
 		stderr       string
+		isatty       bool
 	}{
 		{
 			name: "success",
@@ -373,6 +441,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: `bam!`,
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "show response headers",
@@ -389,6 +458,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: "HTTP/1.1 200 Okey-dokey\nContent-Type: text/plain\r\n\r\nbody",
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "success 204",
@@ -399,6 +469,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: ``,
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "REST error",
@@ -410,6 +481,7 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `{"message": "THIS IS FINE"}`,
 			stderr: "gh: THIS IS FINE (HTTP 400)\n",
+			isatty: false,
 		},
 		{
 			name: "REST string errors",
@@ -421,6 +493,7 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `{"errors": ["ALSO", "FINE"]}`,
 			stderr: "gh: ALSO\nFINE\n",
+			isatty: false,
 		},
 		{
 			name: "GraphQL error",
@@ -435,6 +508,7 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `{"errors": [{"message":"AGAIN"}, {"message":"FINE"}]}`,
 			stderr: "gh: AGAIN\nFINE\n",
+			isatty: false,
 		},
 		{
 			name: "failure",
@@ -445,6 +519,7 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `gateway timeout`,
 			stderr: "gh: HTTP 502\n",
+			isatty: false,
 		},
 		{
 			name: "silent",
@@ -458,6 +533,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: ``,
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "show response headers even when silent",
@@ -475,6 +551,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: "HTTP/1.1 200 Okey-dokey\nContent-Type: text/plain\r\n\r\n",
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "output template",
@@ -489,6 +566,35 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: "not a cat",
 			stderr: ``,
+			isatty: false,
+		},
+		{
+			name: "output template with range",
+			options: ApiOptions{
+				Template: `{{range .}}{{.title}} ({{.labels | pluck "name" | join ", " }}){{"\n"}}{{end}}`,
+			},
+			httpResponse: &http.Response{
+				StatusCode: 200,
+				Body: io.NopCloser(bytes.NewBufferString(`[
+					{
+						"title": "First title",
+						"labels": [{"name":"bug"}, {"name":"help wanted"}]
+					},
+					{
+						"title": "Second but not last"
+					},
+					{
+						"title": "Alas, tis' the end",
+						"labels": [{}, {"name":"feature"}]
+					}
+				]`)),
+				Header: http.Header{"Content-Type": []string{"application/json"}},
+			},
+			stdout: heredoc.Doc(`
+			First title (bug, help wanted)
+			Second but not last ()
+			Alas, tis' the end (, feature)
+		`),
 		},
 		{
 			name: "output template when REST error",
@@ -503,6 +609,7 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `{"message": "THIS IS FINE"}`,
 			stderr: "gh: THIS IS FINE (HTTP 400)\n",
+			isatty: false,
 		},
 		{
 			name: "jq filter",
@@ -517,6 +624,7 @@ func Test_apiRun(t *testing.T) {
 			err:    nil,
 			stdout: "Mona\nHubot\n",
 			stderr: ``,
+			isatty: false,
 		},
 		{
 			name: "jq filter when REST error",
@@ -531,15 +639,32 @@ func Test_apiRun(t *testing.T) {
 			err:    cmdutil.SilentError,
 			stdout: `{"message": "THIS IS FINE"}`,
 			stderr: "gh: THIS IS FINE (HTTP 400)\n",
+			isatty: false,
+		},
+		{
+			name: "jq filter outputting JSON to a TTY",
+			options: ApiOptions{
+				FilterOutput: `.`,
+			},
+			httpResponse: &http.Response{
+				StatusCode: 200,
+				Body:       io.NopCloser(bytes.NewBufferString(`[{"name":"Mona"},{"name":"Hubot"}]`)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			},
+			err:    nil,
+			stdout: "[\n  {\n    \"name\": \"Mona\"\n  },\n  {\n    \"name\": \"Hubot\"\n  }\n]\n",
+			stderr: ``,
+			isatty: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.isatty)
 
 			tt.options.IO = ios
-			tt.options.Config = func() (config.Config, error) { return config.NewBlankConfig(), nil }
+			tt.options.Config = func() (gh.Config, error) { return config.NewBlankConfig(), nil }
 			tt.options.HttpClient = func() (*http.Client, error) {
 				var tr roundTripper = func(req *http.Request) (*http.Response, error) {
 					resp := tt.httpResponse
@@ -570,23 +695,36 @@ func Test_apiRun_paginationREST(t *testing.T) {
 	requestCount := 0
 	responses := []*http.Response{
 		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
 			StatusCode: 200,
 			Body:       io.NopCloser(bytes.NewBufferString(`{"page":1}`)),
 			Header: http.Header{
-				"Link": []string{`<https://api.github.com/repositories/1227/issues?page=2>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"Content-Type":        []string{"application/json"},
+				"Link":                []string{`<https://api.github.com/repositories/1227/issues?page=2>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"X-Github-Request-Id": []string{"1"},
 			},
 		},
 		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
 			StatusCode: 200,
 			Body:       io.NopCloser(bytes.NewBufferString(`{"page":2}`)),
 			Header: http.Header{
-				"Link": []string{`<https://api.github.com/repositories/1227/issues?page=3>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"Content-Type":        []string{"application/json"},
+				"Link":                []string{`<https://api.github.com/repositories/1227/issues?page=3>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"X-Github-Request-Id": []string{"2"},
 			},
 		},
 		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
 			StatusCode: 200,
 			Body:       io.NopCloser(bytes.NewBufferString(`{"page":3}`)),
-			Header:     http.Header{},
+			Header: http.Header{
+				"Content-Type":        []string{"application/json"},
+				"X-Github-Request-Id": []string{"3"},
+			},
 		},
 	}
 
@@ -601,7 +739,7 @@ func Test_apiRun_paginationREST(t *testing.T) {
 			}
 			return &http.Client{Transport: tr}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 
@@ -623,36 +761,42 @@ func Test_apiRun_paginationREST(t *testing.T) {
 	assert.Equal(t, "https://api.github.com/repositories/1227/issues?page=3", responses[2].Request.URL.String())
 }
 
-func Test_apiRun_paginationGraphQL(t *testing.T) {
+func Test_apiRun_arrayPaginationREST(t *testing.T) {
 	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(false)
 
 	requestCount := 0
 	responses := []*http.Response{
 		{
 			StatusCode: 200,
-			Header:     http.Header{"Content-Type": []string{`application/json`}},
-			Body: io.NopCloser(bytes.NewBufferString(`{
-				"data": {
-					"nodes": ["page one"],
-					"pageInfo": {
-						"endCursor": "PAGE1_END",
-						"hasNextPage": true
-					}
-				}
-			}`)),
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"item":1},{"item":2}]`)),
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"Link":         []string{`<https://api.github.com/repositories/1227/issues?page=2>; rel="next", <https://api.github.com/repositories/1227/issues?page=4>; rel="last"`},
+			},
 		},
 		{
 			StatusCode: 200,
-			Header:     http.Header{"Content-Type": []string{`application/json`}},
-			Body: io.NopCloser(bytes.NewBufferString(`{
-				"data": {
-					"nodes": ["page two"],
-					"pageInfo": {
-						"endCursor": "PAGE2_END",
-						"hasNextPage": false
-					}
-				}
-			}`)),
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"item":3},{"item":4}]`)),
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"Link":         []string{`<https://api.github.com/repositories/1227/issues?page=3>; rel="next", <https://api.github.com/repositories/1227/issues?page=4>; rel="last"`},
+			},
+		},
+		{
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"item":5}]`)),
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"Link":         []string{`<https://api.github.com/repositories/1227/issues?page=4>; rel="next", <https://api.github.com/repositories/1227/issues?page=4>; rel="last"`},
+			},
+		},
+		{
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewBufferString(`[]`)),
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
 		},
 	}
 
@@ -667,10 +811,152 @@ func Test_apiRun_paginationGraphQL(t *testing.T) {
 			}
 			return &http.Client{Transport: tr}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 
+		RequestMethod:       "GET",
+		RequestMethodPassed: true,
+		RequestPath:         "issues",
+		Paginate:            true,
+		RawFields:           []string{"per_page=50", "page=1"},
+	}
+
+	err := apiRun(&options)
+	assert.NoError(t, err)
+
+	assert.Equal(t, `[{"item":1},{"item":2},{"item":3},{"item":4},{"item":5} ]`, stdout.String(), "stdout")
+	assert.Equal(t, "", stderr.String(), "stderr")
+
+	assert.Equal(t, "https://api.github.com/issues?page=1&per_page=50", responses[0].Request.URL.String())
+	assert.Equal(t, "https://api.github.com/repositories/1227/issues?page=2", responses[1].Request.URL.String())
+	assert.Equal(t, "https://api.github.com/repositories/1227/issues?page=3", responses[2].Request.URL.String())
+}
+
+func Test_apiRun_arrayPaginationREST_with_headers(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+
+	requestCount := 0
+	responses := []*http.Response{
+		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"page":1}]`)),
+			Header: http.Header{
+				"Content-Type":        []string{"application/json"},
+				"Link":                []string{`<https://api.github.com/repositories/1227/issues?page=2>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"X-Github-Request-Id": []string{"1"},
+			},
+		},
+		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"page":2}]`)),
+			Header: http.Header{
+				"Content-Type":        []string{"application/json"},
+				"Link":                []string{`<https://api.github.com/repositories/1227/issues?page=3>; rel="next", <https://api.github.com/repositories/1227/issues?page=3>; rel="last"`},
+				"X-Github-Request-Id": []string{"2"},
+			},
+		},
+		{
+			Proto:      "HTTP/1.1",
+			Status:     "200 OK",
+			StatusCode: 200,
+			Body:       io.NopCloser(bytes.NewBufferString(`[{"page":3}]`)),
+			Header: http.Header{
+				"Content-Type":        []string{"application/json"},
+				"X-Github-Request-Id": []string{"3"},
+			},
+		},
+	}
+
+	options := ApiOptions{
+		IO: ios,
+		HttpClient: func() (*http.Client, error) {
+			var tr roundTripper = func(req *http.Request) (*http.Response, error) {
+				resp := responses[requestCount]
+				resp.Request = req
+				requestCount++
+				return resp, nil
+			}
+			return &http.Client{Transport: tr}, nil
+		},
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+
+		RequestMethod:       "GET",
+		RequestMethodPassed: true,
+		RequestPath:         "issues",
+		Paginate:            true,
+		RawFields:           []string{"per_page=50", "page=1"},
+		ShowResponseHeaders: true,
+	}
+
+	err := apiRun(&options)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "HTTP/1.1 200 OK\nContent-Type: application/json\r\nLink: <https://api.github.com/repositories/1227/issues?page=2>; rel=\"next\", <https://api.github.com/repositories/1227/issues?page=3>; rel=\"last\"\r\nX-Github-Request-Id: 1\r\n\r\n[{\"page\":1}]\nHTTP/1.1 200 OK\nContent-Type: application/json\r\nLink: <https://api.github.com/repositories/1227/issues?page=3>; rel=\"next\", <https://api.github.com/repositories/1227/issues?page=3>; rel=\"last\"\r\nX-Github-Request-Id: 2\r\n\r\n[{\"page\":2}]\nHTTP/1.1 200 OK\nContent-Type: application/json\r\nX-Github-Request-Id: 3\r\n\r\n[{\"page\":3}]", stdout.String(), "stdout")
+	assert.Equal(t, "", stderr.String(), "stderr")
+
+	assert.Equal(t, "https://api.github.com/issues?page=1&per_page=50", responses[0].Request.URL.String())
+	assert.Equal(t, "https://api.github.com/repositories/1227/issues?page=2", responses[1].Request.URL.String())
+	assert.Equal(t, "https://api.github.com/repositories/1227/issues?page=3", responses[2].Request.URL.String())
+}
+
+func Test_apiRun_paginationGraphQL(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+
+	requestCount := 0
+	responses := []*http.Response{
+		{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{`application/json`}},
+			Body: io.NopCloser(bytes.NewBufferString(heredoc.Doc(`
+			{
+				"data": {
+					"nodes": ["page one"],
+					"pageInfo": {
+						"endCursor": "PAGE1_END",
+						"hasNextPage": true
+					}
+				}
+			}`))),
+		},
+		{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{`application/json`}},
+			Body: io.NopCloser(bytes.NewBufferString(heredoc.Doc(`
+			{
+				"data": {
+					"nodes": ["page two"],
+					"pageInfo": {
+						"endCursor": "PAGE2_END",
+						"hasNextPage": false
+					}
+				}
+			}`))),
+		},
+	}
+
+	options := ApiOptions{
+		IO: ios,
+		HttpClient: func() (*http.Client, error) {
+			var tr roundTripper = func(req *http.Request) (*http.Response, error) {
+				resp := responses[requestCount]
+				resp.Request = req
+				requestCount++
+				return resp, nil
+			}
+			return &http.Client{Transport: tr}, nil
+		},
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+
+		RawFields:     []string{"foo=bar"},
 		RequestMethod: "POST",
 		RequestPath:   "graphql",
 		Paginate:      true,
@@ -679,8 +965,127 @@ func Test_apiRun_paginationGraphQL(t *testing.T) {
 	err := apiRun(&options)
 	require.NoError(t, err)
 
-	assert.Contains(t, stdout.String(), `"page one"`)
-	assert.Contains(t, stdout.String(), `"page two"`)
+	assert.Equal(t, heredoc.Doc(`
+	{
+		"data": {
+			"nodes": ["page one"],
+			"pageInfo": {
+				"endCursor": "PAGE1_END",
+				"hasNextPage": true
+			}
+		}
+	}{
+		"data": {
+			"nodes": ["page two"],
+			"pageInfo": {
+				"endCursor": "PAGE2_END",
+				"hasNextPage": false
+			}
+		}
+	}`), stdout.String())
+	assert.Equal(t, "", stderr.String(), "stderr")
+
+	var requestData struct {
+		Variables map[string]interface{}
+	}
+
+	bb, err := io.ReadAll(responses[0].Request.Body)
+	require.NoError(t, err)
+	err = json.Unmarshal(bb, &requestData)
+	require.NoError(t, err)
+	_, hasCursor := requestData.Variables["endCursor"].(string)
+	assert.Equal(t, false, hasCursor)
+
+	bb, err = io.ReadAll(responses[1].Request.Body)
+	require.NoError(t, err)
+	err = json.Unmarshal(bb, &requestData)
+	require.NoError(t, err)
+	endCursor, hasCursor := requestData.Variables["endCursor"].(string)
+	assert.Equal(t, true, hasCursor)
+	assert.Equal(t, "PAGE1_END", endCursor)
+}
+
+func Test_apiRun_paginationGraphQL_slurp(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+
+	requestCount := 0
+	responses := []*http.Response{
+		{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{`application/json`}},
+			Body: io.NopCloser(bytes.NewBufferString(heredoc.Doc(`
+			{
+				"data": {
+					"nodes": ["page one"],
+					"pageInfo": {
+						"endCursor": "PAGE1_END",
+						"hasNextPage": true
+					}
+				}
+			}`))),
+		},
+		{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{`application/json`}},
+			Body: io.NopCloser(bytes.NewBufferString(heredoc.Doc(`
+			{
+				"data": {
+					"nodes": ["page two"],
+					"pageInfo": {
+						"endCursor": "PAGE2_END",
+						"hasNextPage": false
+					}
+				}
+			}`))),
+		},
+	}
+
+	options := ApiOptions{
+		IO: ios,
+		HttpClient: func() (*http.Client, error) {
+			var tr roundTripper = func(req *http.Request) (*http.Response, error) {
+				resp := responses[requestCount]
+				resp.Request = req
+				requestCount++
+				return resp, nil
+			}
+			return &http.Client{Transport: tr}, nil
+		},
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+
+		RawFields:     []string{"foo=bar"},
+		RequestMethod: "POST",
+		RequestPath:   "graphql",
+		Paginate:      true,
+		Slurp:         true,
+	}
+
+	err := apiRun(&options)
+	require.NoError(t, err)
+
+	assert.JSONEq(t, stdout.String(), `[
+		{
+			"data": {
+				"nodes": ["page one"],
+				"pageInfo": {
+					"endCursor": "PAGE1_END",
+					"hasNextPage": true
+				}
+			}
+		},
+		{
+
+			"data": {
+				"nodes": ["page two"],
+				"pageInfo": {
+					"endCursor": "PAGE2_END",
+					"hasNextPage": false
+				}
+			}
+		}
+	]`)
 	assert.Equal(t, "", stderr.String(), "stderr")
 
 	var requestData struct {
@@ -758,12 +1163,13 @@ func Test_apiRun_paginated_template(t *testing.T) {
 			}
 			return &http.Client{Transport: tr}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 
 		RequestMethod: "POST",
 		RequestPath:   "graphql",
+		RawFields:     []string{"foo=bar"},
 		Paginate:      true,
 		// test that templates executed per page properly render a table.
 		Template: `{{range .data.nodes}}{{tablerow .page .caption}}{{end}}`,
@@ -796,6 +1202,36 @@ func Test_apiRun_paginated_template(t *testing.T) {
 	endCursor, hasCursor := requestData.Variables["endCursor"].(string)
 	assert.Equal(t, true, hasCursor)
 	assert.Equal(t, "PAGE1_END", endCursor)
+}
+
+func Test_apiRun_DELETE(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+
+	var gotRequest *http.Request
+	err := apiRun(&ApiOptions{
+		IO: ios,
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+		HttpClient: func() (*http.Client, error) {
+			var tr roundTripper = func(req *http.Request) (*http.Response, error) {
+				gotRequest = req
+				return &http.Response{StatusCode: 204, Request: req}, nil
+			}
+			return &http.Client{Transport: tr}, nil
+		},
+		MagicFields:         []string(nil),
+		RawFields:           []string(nil),
+		RequestMethod:       "DELETE",
+		RequestMethodPassed: true,
+	})
+	if err != nil {
+		t.Fatalf("got error %v", err)
+	}
+
+	if gotRequest.Body != nil {
+		t.Errorf("expected nil request body, got %T", gotRequest.Body)
+	}
 }
 
 func Test_apiRun_inputFile(t *testing.T) {
@@ -859,7 +1295,7 @@ func Test_apiRun_inputFile(t *testing.T) {
 					}
 					return &http.Client{Transport: tr}, nil
 				},
-				Config: func() (config.Config, error) {
+				Config: func() (gh.Config, error) {
 					return config.NewBlankConfig(), nil
 				},
 			}
@@ -879,185 +1315,43 @@ func Test_apiRun_inputFile(t *testing.T) {
 }
 
 func Test_apiRun_cache(t *testing.T) {
-	ios, _, stdout, stderr := iostreams.Test()
-
+	// Given we have a test server that spies on the number of requests it receives
 	requestCount := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(s.Close)
+
+	ios, _, stdout, stderr := iostreams.Test()
 	options := ApiOptions{
 		IO: ios,
-		HttpClient: func() (*http.Client, error) {
-			var tr roundTripper = func(req *http.Request) (*http.Response, error) {
-				requestCount++
-				return &http.Response{
-					Request:    req,
-					StatusCode: 204,
-				}, nil
-			}
-			return &http.Client{Transport: tr}, nil
+		Config: func() (gh.Config, error) {
+			return &ghmock.ConfigMock{
+				AuthenticationFunc: func() gh.AuthConfig {
+					return &config.AuthConfig{}
+				},
+				// Cached responses are stored in a tempdir that gets automatically cleaned up
+				CacheDirFunc: func() string {
+					return t.TempDir()
+				},
+			}, nil
 		},
-		Config: func() (config.Config, error) {
-			return config.NewBlankConfig(), nil
-		},
-
-		RequestPath: "issues",
+		// You might think that we want to set Host: s.URL here, but you'd be wrong.
+		// The host field is later used to evaluate an API URL e.g. https://api.host.com/graphql
+		// The RequestPath field is used exactly as is, for the request if it includes a host.
+		RequestPath: s.URL,
 		CacheTTL:    time.Minute,
 	}
 
-	t.Cleanup(func() {
-		cacheDir := filepath.Join(os.TempDir(), "gh-cli-cache")
-		os.RemoveAll(cacheDir)
-	})
+	// When we run the API behaviour twice
+	require.NoError(t, apiRun(&options))
+	require.NoError(t, apiRun(&options))
 
-	err := apiRun(&options)
-	assert.NoError(t, err)
-	err = apiRun(&options)
-	assert.NoError(t, err)
-
-	assert.Equal(t, 2, requestCount)
+	// We only get one request to the http server because it uses the cached response
+	assert.Equal(t, 1, requestCount)
 	assert.Equal(t, "", stdout.String(), "stdout")
 	assert.Equal(t, "", stderr.String(), "stderr")
-}
-
-func Test_parseFields(t *testing.T) {
-	ios, stdin, _, _ := iostreams.Test()
-	fmt.Fprint(stdin, "pasted contents")
-
-	opts := ApiOptions{
-		IO: ios,
-		RawFields: []string{
-			"robot=Hubot",
-			"destroyer=false",
-			"helper=true",
-			"location=@work",
-		},
-		MagicFields: []string{
-			"input=@-",
-			"enabled=true",
-			"victories=123",
-		},
-	}
-
-	params, err := parseFields(&opts)
-	if err != nil {
-		t.Fatalf("parseFields error: %v", err)
-	}
-
-	expect := map[string]interface{}{
-		"robot":     "Hubot",
-		"destroyer": "false",
-		"helper":    "true",
-		"location":  "@work",
-		"input":     []byte("pasted contents"),
-		"enabled":   true,
-		"victories": 123,
-	}
-	assert.Equal(t, expect, params)
-}
-
-func Test_magicFieldValue(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "gh-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	fmt.Fprint(f, "file contents")
-
-	ios, _, _, _ := iostreams.Test()
-
-	type args struct {
-		v    string
-		opts *ApiOptions
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    interface{}
-		wantErr bool
-	}{
-		{
-			name:    "string",
-			args:    args{v: "hello"},
-			want:    "hello",
-			wantErr: false,
-		},
-		{
-			name:    "bool true",
-			args:    args{v: "true"},
-			want:    true,
-			wantErr: false,
-		},
-		{
-			name:    "bool false",
-			args:    args{v: "false"},
-			want:    false,
-			wantErr: false,
-		},
-		{
-			name:    "null",
-			args:    args{v: "null"},
-			want:    nil,
-			wantErr: false,
-		},
-		{
-			name: "placeholder colon",
-			args: args{
-				v: ":owner",
-				opts: &ApiOptions{
-					IO: ios,
-					BaseRepo: func() (ghrepo.Interface, error) {
-						return ghrepo.New("hubot", "robot-uprising"), nil
-					},
-				},
-			},
-			want:    "hubot",
-			wantErr: false,
-		},
-		{
-			name: "placeholder braces",
-			args: args{
-				v: "{owner}",
-				opts: &ApiOptions{
-					IO: ios,
-					BaseRepo: func() (ghrepo.Interface, error) {
-						return ghrepo.New("hubot", "robot-uprising"), nil
-					},
-				},
-			},
-			want:    "hubot",
-			wantErr: false,
-		},
-		{
-			name: "file",
-			args: args{
-				v:    "@" + f.Name(),
-				opts: &ApiOptions{IO: ios},
-			},
-			want:    []byte("file contents"),
-			wantErr: false,
-		},
-		{
-			name: "file error",
-			args: args{
-				v:    "@",
-				opts: &ApiOptions{IO: ios},
-			},
-			want:    nil,
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := magicFieldValue(tt.args.v, tt.args.opts)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("magicFieldValue() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if tt.wantErr {
-				return
-			}
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }
 
 func Test_openUserFile(t *testing.T) {
@@ -1090,10 +1384,11 @@ func Test_fillPlaceholders(t *testing.T) {
 		opts  *ApiOptions
 	}
 	tests := []struct {
-		name    string
-		args    args
-		want    string
-		wantErr bool
+		name         string
+		args         args
+		repoOverride bool
+		want         string
+		wantErr      bool
 	}{
 		{
 			name: "no changes",
@@ -1230,9 +1525,26 @@ func Test_fillPlaceholders(t *testing.T) {
 			want:    "{}{ownership}/{repository}",
 			wantErr: false,
 		},
+		{
+			name:         "branch can't be filled when GH_REPO is set",
+			repoOverride: true,
+			args: args{
+				value: "repos/:owner/:repo/branches/:branch",
+				opts: &ApiOptions{
+					BaseRepo: func() (ghrepo.Interface, error) {
+						return ghrepo.New("hubot", "robot-uprising"), nil
+					},
+				},
+			},
+			want:    "repos/hubot/robot-uprising/branches/:branch",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.repoOverride {
+				t.Setenv("GH_REPO", "hubot/robot-uprising")
+			}
 			got, err := fillPlaceholders(tt.args.value, tt.args.opts)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("fillPlaceholders() error = %v, wantErr %v", err, tt.wantErr)
@@ -1302,7 +1614,7 @@ func Test_processResponse_template(t *testing.T) {
 	tmpl := template.New(ios.Out, ios.TerminalWidth(), ios.ColorEnabled())
 	err := tmpl.Parse(opts.Template)
 	require.NoError(t, err)
-	_, err = processResponse(&resp, &opts, ios.Out, io.Discard, &tmpl)
+	_, err = processResponse(&resp, &opts, ios.Out, io.Discard, tmpl, true, true)
 	require.NoError(t, err)
 	err = tmpl.Flush()
 	require.NoError(t, err)
@@ -1393,6 +1705,61 @@ func Test_parseErrorResponse(t *testing.T) {
 			if got1 != tt.wantErrMsg {
 				t.Errorf("parseErrorResponse() got1 = %q, want %q", got1, tt.wantErrMsg)
 			}
+		})
+	}
+}
+
+func Test_apiRun_acceptHeader(t *testing.T) {
+	tests := []struct {
+		name             string
+		options          ApiOptions
+		wantAcceptHeader string
+	}{
+		{
+			name:             "sets default accept header",
+			options:          ApiOptions{},
+			wantAcceptHeader: "*/*",
+		},
+		{
+			name: "does not override user accept header",
+			options: ApiOptions{
+				RequestHeaders: []string{"Accept: testing"},
+			},
+			wantAcceptHeader: "testing",
+		},
+		{
+			name: "does not override preview names",
+			options: ApiOptions{
+				Previews: []string{"nebula"},
+			},
+			wantAcceptHeader: "application/vnd.github.nebula-preview+json",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, _, _ := iostreams.Test()
+			tt.options.IO = ios
+
+			tt.options.Config = func() (gh.Config, error) {
+				return config.NewBlankConfig(), nil
+			}
+
+			var gotReq *http.Request
+			tt.options.HttpClient = func() (*http.Client, error) {
+				var tr roundTripper = func(req *http.Request) (*http.Response, error) {
+					gotReq = req
+					resp := &http.Response{
+						StatusCode: 200,
+						Request:    req,
+						Body:       io.NopCloser(bytes.NewBufferString("")),
+					}
+					return resp, nil
+				}
+				return &http.Client{Transport: tr}, nil
+			}
+
+			assert.NoError(t, apiRun(&tt.options))
+			assert.Equal(t, tt.wantAcceptHeader, gotReq.Header.Get("Accept"))
 		})
 	}
 }

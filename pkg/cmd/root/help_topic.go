@@ -10,10 +10,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var HelpTopics = map[string]map[string]string{
-	"mintty": {
-		"short": "Information about using gh with MinTTY",
-		"long": heredoc.Doc(`
+type helpTopic struct {
+	name    string
+	short   string
+	long    string
+	example string
+}
+
+var HelpTopics = []helpTopic{
+	{
+		name:  "mintty",
+		short: "Information about using gh with MinTTY",
+		long: heredoc.Docf(`
 			MinTTY is the terminal emulator that comes by default with Git
 			for Windows. It has known issues with gh's ability to prompt a
 			user for input.
@@ -23,74 +31,93 @@ var HelpTopics = map[string]map[string]string{
 			- Reinstall Git for Windows, checking "Enable experimental support for pseudo consoles".
 
 			- Use a different terminal emulator with Git for Windows like Windows Terminal.
-			  You can run "C:\Program Files\Git\bin\bash.exe" from any terminal emulator to continue
+			  You can run %[1]sC:\Program Files\Git\bin\bash.exe%[1]s from any terminal emulator to continue
 			  using all of the tooling in Git For Windows without MinTTY.
 
-			- Prefix invocations of gh with winpty, eg: "winpty gh auth login".
+			- Prefix invocations of gh with %[1]swinpty%[1]s, eg: %[1]swinpty gh auth login%[1]s.
 			  NOTE: this can lead to some UI bugs.
-		`),
+		`, "`"),
 	},
-	"environment": {
-		"short": "Environment variables that can be used with gh",
-		"long": heredoc.Doc(`
-			GH_TOKEN, GITHUB_TOKEN (in order of precedence): an authentication token for github.com
-			API requests. Setting this avoids being prompted to authenticate and takes precedence over
-			previously stored credentials.
+	{
+		name:  "environment",
+		short: "Environment variables that can be used with gh",
+		long: heredoc.Docf(`
+			%[1]sGH_TOKEN%[1]s, %[1]sGITHUB_TOKEN%[1]s (in order of precedence): an authentication token that will be used when
+			a command targets either github.com or a subdomain of ghe.com. Setting this avoids being prompted to
+			authenticate and takes precedence over previously stored credentials.
 
-			GH_ENTERPRISE_TOKEN, GITHUB_ENTERPRISE_TOKEN (in order of precedence): an authentication
-			token for API requests to GitHub Enterprise. When setting this, also set GH_HOST.
+			%[1]sGH_ENTERPRISE_TOKEN%[1]s, %[1]sGITHUB_ENTERPRISE_TOKEN%[1]s (in order of precedence): an authentication
+			token that will be used when a command targets a GitHub Enterprise Server host.
 
-			GH_HOST: specify the GitHub hostname for commands that would otherwise assume the
-			"github.com" host when not in a context of an existing repository.
+			%[1]sGH_HOST%[1]s: specify the GitHub hostname for commands where a hostname has not been provided, or
+			cannot be inferred from the context of a local Git repository. If this host was previously
+			authenticated with, the stored credentials will be used. Otherwise, setting %[1]sGH_TOKEN%[1]s or
+			%[1]sGH_ENTERPRISE_TOKEN%[1]s is required, depending on the targeted host.
 
-			GH_REPO: specify the GitHub repository in the "[HOST/]OWNER/REPO" format for commands
+			%[1]sGH_REPO%[1]s: specify the GitHub repository in the %[1]s[HOST/]OWNER/REPO%[1]s format for commands
 			that otherwise operate on a local repository.
 
-			GH_EDITOR, GIT_EDITOR, VISUAL, EDITOR (in order of precedence): the editor tool to use
+			%[1]sGH_EDITOR%[1]s, %[1]sGIT_EDITOR%[1]s, %[1]sVISUAL%[1]s, %[1]sEDITOR%[1]s (in order of precedence): the editor tool to use
 			for authoring text.
 
-			GH_BROWSER, BROWSER (in order of precedence): the web browser to use for opening links.
+			%[1]sGH_BROWSER%[1]s, %[1]sBROWSER%[1]s (in order of precedence): the web browser to use for opening links.
 
-			GH_DEBUG: set to a truthy value to enable verbose output on standard error. Set to "api"
+			%[1]sGH_DEBUG%[1]s: set to a truthy value to enable verbose output on standard error. Set to %[1]sapi%[1]s
 			to additionally log details of HTTP traffic.
 
-			DEBUG (deprecated): set to "1", "true", or "yes" to enable verbose output on standard
+			%[1]sDEBUG%[1]s (deprecated): set to %[1]s1%[1]s, %[1]strue%[1]s, or %[1]syes%[1]s to enable verbose output on standard
 			error.
 
-			GH_PAGER, PAGER (in order of precedence): a terminal paging program to send standard output
-			to, e.g. "less".
+			%[1]sGH_PAGER%[1]s, %[1]sPAGER%[1]s (in order of precedence): a terminal paging program to send standard output
+			to, e.g. %[1]sless%[1]s.
 
-			GLAMOUR_STYLE: the style to use for rendering Markdown. See
+			%[1]sGLAMOUR_STYLE%[1]s: the style to use for rendering Markdown. See
 			<https://github.com/charmbracelet/glamour#styles>
 
-			NO_COLOR: set to any value to avoid printing ANSI escape sequences for color output.
+			%[1]sNO_COLOR%[1]s: set to any value to avoid printing ANSI escape sequences for color output.
 
-			CLICOLOR: set to "0" to disable printing ANSI colors in output.
+			%[1]sCLICOLOR%[1]s: set to %[1]s0%[1]s to disable printing ANSI colors in output.
 
-			CLICOLOR_FORCE: set to a value other than "0" to keep ANSI colors in output
+			%[1]sCLICOLOR_FORCE%[1]s: set to a value other than %[1]s0%[1]s to keep ANSI colors in output
 			even when the output is piped.
 
-			GH_FORCE_TTY: set to any value to force terminal-style output even when the output is
+			%[1]sGH_FORCE_TTY%[1]s: set to any value to force terminal-style output even when the output is
 			redirected. When the value is a number, it is interpreted as the number of columns
 			available in the viewport. When the value is a percentage, it will be applied against
 			the number of columns available in the current viewport.
 
-			GH_NO_UPDATE_NOTIFIER: set to any value to disable update notifications. By default, gh
-			checks for new releases once every 24 hours and displays an upgrade notice on standard
-			error if a newer version was found.
+			%[1]sGH_NO_UPDATE_NOTIFIER%[1]s: set to any value to disable GitHub CLI update notifications.
+			When any command is executed, gh checks for new versions once every 24 hours.
+			If a newer version was found, an upgrade notice is displayed on standard error.
 
-			GH_CONFIG_DIR: the directory where gh will store configuration files. Default:
-			"$XDG_CONFIG_HOME/gh" or "$HOME/.config/gh".
+			%[1]sGH_NO_EXTENSION_UPDATE_NOTIFIER%[1]s: set to any value to disable GitHub CLI extension update notifications.
+			When an extension is executed, gh checks for new versions for the executed extension once every 24 hours.
+			If a newer version was found, an upgrade notice is displayed on standard error.
 
-			GH_PROMPT_DISABLED: set to any value to disable interactive prompting in the terminal.
-		`),
+			%[1]sGH_CONFIG_DIR%[1]s: the directory where gh will store configuration files. If not specified,
+			the default value will be one of the following paths (in order of precedence):
+			  - %[1]s$XDG_CONFIG_HOME/gh%[1]s (if %[1]s$XDG_CONFIG_HOME%[1]s is set),
+			  - %[1]s$AppData/GitHub CLI%[1]s (on Windows if %[1]s$AppData%[1]s is set), or
+			  - %[1]s$HOME/.config/gh%[1]s.
+
+			%[1]sGH_PROMPT_DISABLED%[1]s: set to any value to disable interactive prompting in the terminal.
+
+			%[1]sGH_PATH%[1]s: set the path to the gh executable, useful for when gh can not properly determine
+			its own path such as in the cygwin terminal.
+
+			%[1]sGH_MDWIDTH%[1]s: default maximum width for markdown render wrapping.  The max width of lines
+			wrapped on the terminal will be taken as the lesser of the terminal width, this value, or 120 if
+			not specified.  This value is used, for example, with %[1]spr view%[1]s subcommand.
+		`, "`"),
 	},
-	"reference": {
-		"short": "A comprehensive reference of all gh commands",
+	{
+		name:  "reference",
+		short: "A comprehensive reference of all gh commands",
 	},
-	"formatting": {
-		"short": "Formatting options for JSON data exported from gh",
-		"long": heredoc.Docf(`
+	{
+		name:  "formatting",
+		short: "Formatting options for JSON data exported from gh",
+		long: heredoc.Docf(`
 			By default, the result of %[1]sgh%[1]s commands are output in line-based plain text format.
 			Some commands support passing the %[1]s--json%[1]s flag, which converts the output to JSON format.
 			Once in JSON, the output can be further formatted according to a required formatting string by
@@ -104,9 +131,10 @@ var HelpTopics = map[string]map[string]string{
 
 			The %[1]s--jq%[1]s flag requires a string argument in jq query syntax, and will only print
 			those JSON values which match the query. jq queries can be used to select elements from an
-			array, fields from an object, create a new array, and more. The jq utility does not need
-			to be installed on the system to use this formatting directive.
-			To learn about jq query syntax, see: <https://stedolan.github.io/jq/manual/v1.6/>
+			array, fields from an object, create a new array, and more. The %[1]sjq%[1]s utility does not need
+			to be installed on the system to use this formatting directive. When connected to a terminal,
+			the output is automatically pretty-printed. To learn about jq query syntax, see:
+			<https://jqlang.github.io/jq/manual/>
 
 			The %[1]s--template%[1]s flag requires a string argument in Go template syntax, and will only print
 			those JSON values which match the query.
@@ -119,12 +147,13 @@ var HelpTopics = map[string]map[string]string{
 			- %[1]stablerow <fields>...%[1]s: aligns fields in output vertically as a table
 			- %[1]stablerender%[1]s: renders fields added by tablerow in place
 			- %[1]stimeago <time>%[1]s: renders a timestamp as relative to now
-			- %[1]stimefmt <format> <time>%[1]s: formats a timestamp using Go's Time.Format function
+			- %[1]stimefmt <format> <time>%[1]s: formats a timestamp using Go's %[1]sTime.Format%[1]s function
 			- %[1]struncate <length> <input>%[1]s: ensures input fits within length
+			- %[1]shyperlink <url> <text>%[1]s: renders a terminal hyperlink
 
 			To learn more about Go templates, see: <https://golang.org/pkg/text/template/>.
 		`, "`"),
-		"example": heredoc.Doc(`
+		example: heredoc.Doc(`
 			# default output format
 			$ gh pr list
 			Showing 23 of 23 open pull requests in cli/cli
@@ -138,25 +167,25 @@ var HelpTopics = map[string]map[string]string{
 			$ gh pr list --json number,title,author
 			[
 			  {
-				"author": {
-				  "login": "monalisa"
-				},
-				"number": 123,
-				"title": "A helpful contribution"
+			    "author": {
+			      "login": "monalisa"
+			    },
+			    "number": 123,
+			    "title": "A helpful contribution"
 			  },
 			  {
-				"author": {
-				  "login": "codercat"
-				},
-				"number": 124,
-				"title": "Improve the docs"
+			    "author": {
+			      "login": "codercat"
+			    },
+			    "number": 124,
+			    "title": "Improve the docs"
 			  },
 			  {
-				"author": {
-				  "login": "cli-maintainer"
-				},
-				"number": 125,
-				"title": "An exciting new feature"
+			    "author": {
+			      "login": "cli-maintainer"
+			    },
+			    "number": 125,
+			    "title": "An exciting new feature"
 			  }
 			]
 
@@ -166,6 +195,40 @@ var HelpTopics = map[string]map[string]string{
 			monalisa
 			codercat
 			cli-maintainer
+
+			# --jq can be used to implement more complex filtering and output changes:
+			$ gh issue list --json number,title,labels --jq \
+			  'map(select((.labels | length) > 0))    # must have labels
+			  | map(.labels = (.labels | map(.name))) # show only the label names
+			  | .[:3]                                 # select the first 3 results'
+			  [
+			    {
+			      "labels": [
+			        "enhancement",
+			        "needs triage"
+			      ],
+			      "number": 123,
+			      "title": "A helpful contribution"
+			    },
+			    {
+			      "labels": [
+			        "help wanted",
+			        "docs",
+			        "good first issue"
+			      ],
+			      "number": 125,
+			      "title": "Improve the docs"
+			    },
+			    {
+			      "labels": [
+			        "enhancement",
+			      ],
+			      "number": 7221,
+			      "title": "An exciting new feature"
+			    }
+			  ]
+			# using the --template flag with the hyperlink helper
+			gh issue list --json title,url --template '{{range .}}{{hyperlink .url .title}}{{"\n"}}{{end}}'
 
 
 			# adding the --template flag and modifying the display format
@@ -199,9 +262,10 @@ var HelpTopics = map[string]map[string]string{
 			mislav    COMMENTED          This is going along great! Thanks for working on this ❤️
 		`),
 	},
-	"exit-codes": {
-		"short": "Exit codes used by gh",
-		"long": heredoc.Doc(`
+	{
+		name:  "exit-codes",
+		short: "Exit codes used by gh",
+		long: heredoc.Doc(`
 			gh follows normal conventions regarding exit codes.
 
 			- If a command completes successfully, the exit code will be 0
@@ -210,7 +274,7 @@ var HelpTopics = map[string]map[string]string{
 
 			- If a command is running but gets cancelled, the exit code will be 2
 
-			- If a command encounters an authentication issue, the exit code will be 4
+			- If a command requires authentication, the exit code will be 4
 
 			NOTE: It is possible that a particular command may have more exit codes, so it is a good
 			practice to check documentation for the command if you are relying on exit codes to
@@ -219,30 +283,31 @@ var HelpTopics = map[string]map[string]string{
 	},
 }
 
-func NewHelpTopic(ios *iostreams.IOStreams, topic string) *cobra.Command {
+func NewCmdHelpTopic(ios *iostreams.IOStreams, ht helpTopic) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     topic,
-		Short:   HelpTopics[topic]["short"],
-		Long:    HelpTopics[topic]["long"],
-		Example: HelpTopics[topic]["example"],
+		Use:     ht.name,
+		Short:   ht.short,
+		Long:    ht.long,
+		Example: ht.example,
 		Hidden:  true,
 		Annotations: map[string]string{
 			"markdown:generate": "true",
-			"markdown:basename": "gh_help_" + topic,
+			"markdown:basename": "gh_help_" + ht.name,
 		},
 	}
 
-	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-		helpTopicHelpFunc(ios.Out, c, args)
-	})
 	cmd.SetUsageFunc(func(c *cobra.Command) error {
 		return helpTopicUsageFunc(ios.ErrOut, c)
+	})
+
+	cmd.SetHelpFunc(func(c *cobra.Command, _ []string) {
+		helpTopicHelpFunc(ios.Out, c)
 	})
 
 	return cmd
 }
 
-func helpTopicHelpFunc(w io.Writer, command *cobra.Command, args []string) {
+func helpTopicHelpFunc(w io.Writer, command *cobra.Command) {
 	fmt.Fprint(w, command.Long)
 	if command.Example != "" {
 		fmt.Fprintf(w, "\n\nEXAMPLES\n")

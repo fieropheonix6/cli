@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/spf13/cobra"
@@ -16,13 +18,17 @@ import (
 func rootUsageFunc(w io.Writer, command *cobra.Command) error {
 	fmt.Fprintf(w, "Usage:  %s", command.UseLine())
 
-	subcommands := command.Commands()
+	var subcommands []*cobra.Command
+	for _, c := range command.Commands() {
+		if !c.IsAvailableCommand() {
+			continue
+		}
+		subcommands = append(subcommands, c)
+	}
+
 	if len(subcommands) > 0 {
 		fmt.Fprint(w, "\n\nAvailable commands:\n")
 		for _, c := range subcommands {
-			if c.Hidden {
-				continue
-			}
 			fmt.Fprintf(w, "  %s\n", c.Name())
 		}
 		return nil
@@ -82,8 +88,10 @@ func isRootCmd(command *cobra.Command) bool {
 }
 
 func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
+	flags := command.Flags()
+
 	if isRootCmd(command) {
-		if versionVal, err := command.Flags().GetBool("version"); err == nil && versionVal {
+		if versionVal, err := flags.GetBool("version"); err == nil && versionVal {
 			fmt.Fprint(f.IOStreams.Out, command.Annotations["versionInfo"])
 			return
 		} else if err != nil {
@@ -95,39 +103,13 @@ func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
 
 	cs := f.IOStreams.ColorScheme()
 
-	if isRootCmd(command.Parent()) && len(args) >= 2 && args[1] != "--help" && args[1] != "-h" {
-		nestedSuggestFunc(f.IOStreams.ErrOut, command, args[1])
+	if help, _ := flags.GetBool("help"); !help && !command.Runnable() && len(flags.Args()) > 0 {
+		nestedSuggestFunc(f.IOStreams.ErrOut, command, flags.Args()[0])
 		hasFailed = true
 		return
 	}
 
 	namePadding := 12
-	coreCommands := []string{}
-	actionsCommands := []string{}
-	additionalCommands := []string{}
-	for _, c := range command.Commands() {
-		if c.Short == "" {
-			continue
-		}
-		if c.Hidden {
-			continue
-		}
-
-		s := rpad(c.Name()+":", namePadding) + c.Short
-		if _, ok := c.Annotations["IsCore"]; ok {
-			coreCommands = append(coreCommands, s)
-		} else if _, ok := c.Annotations["IsActions"]; ok {
-			actionsCommands = append(actionsCommands, s)
-		} else {
-			additionalCommands = append(additionalCommands, s)
-		}
-	}
-
-	// If there are no core commands, assume everything is a core command
-	if len(coreCommands) == 0 {
-		coreCommands = additionalCommands
-		additionalCommands = []string{}
-	}
 
 	type helpEntry struct {
 		Title string
@@ -148,14 +130,20 @@ func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
 		helpEntries = append(helpEntries, helpEntry{"", longText})
 	}
 	helpEntries = append(helpEntries, helpEntry{"USAGE", command.UseLine()})
-	if len(coreCommands) > 0 {
-		helpEntries = append(helpEntries, helpEntry{"CORE COMMANDS", strings.Join(coreCommands, "\n")})
+
+	if len(command.Aliases) > 0 {
+		helpEntries = append(helpEntries, helpEntry{"ALIASES", strings.Join(BuildAliasList(command, command.Aliases), ", ") + "\n"})
 	}
-	if len(actionsCommands) > 0 {
-		helpEntries = append(helpEntries, helpEntry{"ACTIONS COMMANDS", strings.Join(actionsCommands, "\n")})
-	}
-	if len(additionalCommands) > 0 {
-		helpEntries = append(helpEntries, helpEntry{"ADDITIONAL COMMANDS", strings.Join(additionalCommands, "\n")})
+
+	for _, g := range GroupedCommands(command) {
+		var names []string
+		for _, c := range g.Commands {
+			names = append(names, rpad(c.Name()+":", namePadding)+c.Short)
+		}
+		helpEntries = append(helpEntries, helpEntry{
+			Title: strings.ToUpper(g.Title),
+			Body:  strings.Join(names, "\n"),
+		})
 	}
 
 	if isRootCmd(command) {
@@ -163,19 +151,11 @@ func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
 		if c := findCommand(command, "actions"); c != nil {
 			helpTopics = append(helpTopics, rpad(c.Name()+":", namePadding)+c.Short)
 		}
-		for topic, params := range HelpTopics {
-			helpTopics = append(helpTopics, rpad(topic+":", namePadding)+params["short"])
+		for _, helpTopic := range HelpTopics {
+			helpTopics = append(helpTopics, rpad(helpTopic.name+":", namePadding)+helpTopic.short)
 		}
 		sort.Strings(helpTopics)
 		helpEntries = append(helpEntries, helpEntry{"HELP TOPICS", strings.Join(helpTopics, "\n")})
-
-		if exts := f.ExtensionManager.List(); len(exts) > 0 {
-			var names []string
-			for _, ext := range exts {
-				names = append(names, ext.Name())
-			}
-			helpEntries = append(helpEntries, helpEntry{"EXTENSION COMMANDS", strings.Join(names, "\n")})
-		}
 	}
 
 	flagUsages := command.LocalFlags().FlagUsages()
@@ -186,6 +166,10 @@ func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
 	if inheritedFlagUsages != "" {
 		helpEntries = append(helpEntries, helpEntry{"INHERITED FLAGS", dedent(inheritedFlagUsages)})
 	}
+	if _, ok := command.Annotations["help:json-fields"]; ok {
+		fields := strings.Split(command.Annotations["help:json-fields"], ",")
+		helpEntries = append(helpEntries, helpEntry{"JSON FIELDS", text.FormatSlice(fields, 80, 0, "", "", true)})
+	}
 	if _, ok := command.Annotations["help:arguments"]; ok {
 		helpEntries = append(helpEntries, helpEntry{"ARGUMENTS", command.Annotations["help:arguments"]})
 	}
@@ -195,12 +179,11 @@ func rootHelpFunc(f *cmdutil.Factory, command *cobra.Command, args []string) {
 	if _, ok := command.Annotations["help:environment"]; ok {
 		helpEntries = append(helpEntries, helpEntry{"ENVIRONMENT VARIABLES", command.Annotations["help:environment"]})
 	}
-	helpEntries = append(helpEntries, helpEntry{"LEARN MORE", `
-Use 'gh <command> <subcommand> --help' for more information about a command.
-Read the manual at https://cli.github.com/manual`})
-	if _, ok := command.Annotations["help:feedback"]; ok {
-		helpEntries = append(helpEntries, helpEntry{"FEEDBACK", command.Annotations["help:feedback"]})
-	}
+	helpEntries = append(helpEntries, helpEntry{"LEARN MORE", heredoc.Docf(`
+		Use %[1]sgh <command> <subcommand> --help%[1]s for more information about a command.
+		Read the manual at https://cli.github.com/manual
+		Learn about exit codes using %[1]sgh help exit-codes%[1]s
+	`, "`")})
 
 	out := f.IOStreams.Out
 	for _, e := range helpEntries {
@@ -216,6 +199,27 @@ Read the manual at https://cli.github.com/manual`})
 	}
 }
 
+func authHelp() string {
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		return heredoc.Doc(`
+			gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable. Example:
+			  env:
+			    GH_TOKEN: ${{ github.token }}
+		`)
+	}
+
+	if os.Getenv("CI") != "" {
+		return heredoc.Doc(`
+			gh: To use GitHub CLI in automation, set the GH_TOKEN environment variable.
+		`)
+	}
+
+	return heredoc.Doc(`
+		To get started with GitHub CLI, please run:  gh auth login
+		Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.
+	`)
+}
+
 func findCommand(cmd *cobra.Command, name string) *cobra.Command {
 	for _, c := range cmd.Commands() {
 		if c.Name() == name {
@@ -223,6 +227,49 @@ func findCommand(cmd *cobra.Command, name string) *cobra.Command {
 		}
 	}
 	return nil
+}
+
+type CommandGroup struct {
+	Title    string
+	Commands []*cobra.Command
+}
+
+func GroupedCommands(cmd *cobra.Command) []CommandGroup {
+	var res []CommandGroup
+
+	for _, g := range cmd.Groups() {
+		var cmds []*cobra.Command
+		for _, c := range cmd.Commands() {
+			if c.GroupID == g.ID && c.IsAvailableCommand() {
+				cmds = append(cmds, c)
+			}
+		}
+		if len(cmds) > 0 {
+			res = append(res, CommandGroup{
+				Title:    g.Title,
+				Commands: cmds,
+			})
+		}
+	}
+
+	var cmds []*cobra.Command
+	for _, c := range cmd.Commands() {
+		if c.GroupID == "" && c.IsAvailableCommand() {
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) > 0 {
+		defaultGroupTitle := "Additional commands"
+		if len(cmd.Groups()) == 0 {
+			defaultGroupTitle = "Available commands"
+		}
+		res = append(res, CommandGroup{
+			Title:    defaultGroupTitle,
+			Commands: cmds,
+		})
+	}
+
+	return res
 }
 
 // rpad adds padding to the right of a string.
@@ -255,4 +302,25 @@ func dedent(s string) string {
 		fmt.Fprintln(&buf, strings.TrimPrefix(l, strings.Repeat(" ", minIndent)))
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+func BuildAliasList(cmd *cobra.Command, aliases []string) []string {
+	if !cmd.HasParent() {
+		return aliases
+	}
+
+	parentAliases := append(cmd.Parent().Aliases, cmd.Parent().Name())
+	sort.Strings(parentAliases)
+
+	var aliasesWithParentAliases []string
+	// e.g aliases = [ls]
+	for _, alias := range aliases {
+		// e.g parentAliases = [codespaces, cs]
+		for _, parentAlias := range parentAliases {
+			// e.g. aliasesWithParentAliases = [codespaces list, codespaces ls, cs list, cs ls]
+			aliasesWithParentAliases = append(aliasesWithParentAliases, fmt.Sprintf("%s %s", parentAlias, alias))
+		}
+	}
+
+	return BuildAliasList(cmd.Parent(), aliasesWithParentAliases)
 }

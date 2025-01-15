@@ -1,15 +1,17 @@
 package delete
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	ghAuth "github.com/cli/go-gh/pkg/auth"
+	ghauth "github.com/cli/go-gh/v2/pkg/auth"
 	"github.com/spf13/cobra"
 )
 
@@ -37,29 +39,35 @@ func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Co
 	cmd := &cobra.Command{
 		Use:   "delete [<repository>]",
 		Short: "Delete a repository",
-		Long: `Delete a GitHub repository.
+		Long: heredoc.Docf(`
+			Delete a GitHub repository.
+			
+			With no argument, deletes the current repository. Otherwise, deletes the specified repository.
 
-With no argument, deletes the current repository. Otherwise, deletes the specified repository.
-
-Deletion requires authorization with the "delete_repo" scope. 
-To authorize, run "gh auth refresh -s delete_repo"`,
+			Deletion requires authorization with the %[1]sdelete_repo%[1]s scope. 
+			To authorize, run %[1]sgh auth refresh -s delete_repo%[1]s
+		`, "`"),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.RepoArg = args[0]
 			}
+
 			if !opts.IO.CanPrompt() && !opts.Confirmed {
-				return cmdutil.FlagErrorf("--confirm required when not running interactively")
+				return cmdutil.FlagErrorf("--yes required when not running interactively")
 			}
 
 			if runF != nil {
 				return runF(opts)
 			}
+
 			return deleteRun(opts)
 		},
 	}
 
 	cmd.Flags().BoolVar(&opts.Confirmed, "confirm", false, "confirm deletion without prompting")
+	_ = cmd.Flags().MarkDeprecated("confirm", "use `--yes` instead")
+	cmd.Flags().BoolVar(&opts.Confirmed, "yes", false, "confirm deletion without prompting")
 	return cmd
 }
 
@@ -80,7 +88,7 @@ func deleteRun(opts *DeleteOptions) error {
 	} else {
 		repoSelector := opts.RepoArg
 		if !strings.Contains(repoSelector, "/") {
-			defaultHost, _ := ghAuth.DefaultHost()
+			defaultHost, _ := ghauth.DefaultHost()
 			currentUser, err := api.CurrentLoginName(apiClient, defaultHost)
 			if err != nil {
 				return err
@@ -102,6 +110,17 @@ func deleteRun(opts *DeleteOptions) error {
 
 	err = deleteRepo(httpClient, toDelete)
 	if err != nil {
+		var httpErr api.HTTPError
+		if errors.As(err, &httpErr) {
+			statusCode := httpErr.HTTPError.StatusCode
+			if statusCode == http.StatusMovedPermanently ||
+				statusCode == http.StatusTemporaryRedirect ||
+				statusCode == http.StatusPermanentRedirect {
+				cs := opts.IO.ColorScheme()
+				fmt.Fprintf(opts.IO.ErrOut, "%s Failed to delete repository: %s has changed name or transferred ownership\n", cs.FailureIcon(), fullName)
+				return cmdutil.SilentError
+			}
+		}
 		return err
 	}
 

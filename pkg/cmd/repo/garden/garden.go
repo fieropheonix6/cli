@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/cli/cli/v2/api"
-	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -90,7 +90,7 @@ type GardenOptions struct {
 	HttpClient func() (*http.Client, error)
 	IO         *iostreams.IOStreams
 	BaseRepo   func() (ghrepo.Interface, error)
-	Config     func() (config.Config, error)
+	Config     func() (gh.Config, error)
 
 	RepoArg string
 }
@@ -155,7 +155,7 @@ func gardenRun(opts *GardenOptions) error {
 			if err != nil {
 				return err
 			}
-			hostname, _ := cfg.DefaultHost()
+			hostname, _ := cfg.Authentication().DefaultHost()
 			currentUser, err := api.CurrentLoginName(apiClient, hostname)
 			if err != nil {
 				return err
@@ -169,7 +169,7 @@ func gardenRun(opts *GardenOptions) error {
 	}
 
 	seed := computeSeed(ghrepo.FullName(toView))
-	rand.Seed(seed)
+	r := rand.New(rand.NewSource(seed))
 
 	termWidth, termHeight, err := utils.TerminalSize(out)
 	if err != nil {
@@ -198,7 +198,7 @@ func gardenRun(opts *GardenOptions) error {
 	}
 	player := &Player{0, 0, cs.Bold("@"), geo, 0}
 
-	garden := plantGarden(commits, geo)
+	garden := plantGarden(r, commits, geo)
 	if len(garden) < geo.Height {
 		geo.Height = len(garden)
 	}
@@ -236,16 +236,15 @@ func gardenRun(opts *GardenOptions) error {
 		}
 	}()
 
-mainLoop:
 	for {
 		oldX := player.X
 		oldY := player.Y
 
 		d := <-dirc
 		if d == Quit {
-			break mainLoop
+			break
 		} else if !player.move(d) {
-			continue mainLoop
+			continue
 		}
 
 		underPlayer := garden[player.Y][player.X]
@@ -334,11 +333,11 @@ func isQuit(b []byte) bool {
 	return rune(b[0]) == 'q' || bytes.Equal(b, ctrlC)
 }
 
-func plantGarden(commits []*Commit, geo *Geometry) [][]*Cell {
+func plantGarden(r *rand.Rand, commits []*Commit, geo *Geometry) [][]*Cell {
 	cellIx := 0
 	grassCell := &Cell{RGB(0, 200, 0, ","), "You're standing on a patch of grass in a field of wildflowers."}
 	garden := [][]*Cell{}
-	streamIx := rand.Intn(geo.Width - 1)
+	streamIx := r.Intn(geo.Width - 1)
 	if streamIx == geo.Width/2 {
 		streamIx--
 	}
@@ -363,7 +362,7 @@ func plantGarden(commits []*Commit, geo *Geometry) [][]*Cell {
 				})
 				tint += 15
 				streamIx--
-				if rand.Float64() < 0.5 {
+				if r.Float64() < 0.5 {
 					streamIx++
 				}
 				if streamIx < 0 {
@@ -393,7 +392,7 @@ func plantGarden(commits []*Commit, geo *Geometry) [][]*Cell {
 				continue
 			}
 
-			chance := rand.Float64()
+			chance := r.Float64()
 			if chance <= geo.Density {
 				commit := commits[cellIx]
 				garden[y] = append(garden[y], &Cell{

@@ -3,10 +3,13 @@ package edit
 import (
 	"fmt"
 	"net/http"
+	"sort"
+	"sync"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/text"
 	shared "github.com/cli/cli/v2/pkg/cmd/issue/shared"
 	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -18,14 +21,15 @@ type EditOptions struct {
 	HttpClient func() (*http.Client, error)
 	IO         *iostreams.IOStreams
 	BaseRepo   func() (ghrepo.Interface, error)
+	Prompter   prShared.EditPrompter
 
 	DetermineEditor    func() (string, error)
-	FieldsToEditSurvey func(*prShared.Editable) error
-	EditFieldsSurvey   func(*prShared.Editable, string) error
+	FieldsToEditSurvey func(prShared.EditPrompter, *prShared.Editable) error
+	EditFieldsSurvey   func(prShared.EditPrompter, *prShared.Editable, string) error
 	FetchOptions       func(*api.Client, ghrepo.Interface, *prShared.Editable) error
 
-	SelectorArg string
-	Interactive bool
+	SelectorArgs []string
+	Interactive  bool
 
 	prShared.Editable
 }
@@ -38,27 +42,37 @@ func NewCmdEdit(f *cmdutil.Factory, runF func(*EditOptions) error) *cobra.Comman
 		FieldsToEditSurvey: prShared.FieldsToEditSurvey,
 		EditFieldsSurvey:   prShared.EditFieldsSurvey,
 		FetchOptions:       prShared.FetchOptions,
+		Prompter:           f.Prompter,
 	}
 
 	var bodyFile string
+	var removeMilestone bool
 
 	cmd := &cobra.Command{
-		Use:   "edit {<number> | <url>}",
-		Short: "Edit an issue",
+		Use:   "edit {<numbers> | <urls>}",
+		Short: "Edit issues",
+		Long: heredoc.Docf(`
+			Edit one or more issues within the same repository.
+
+			Editing issues' projects requires authorization with the %[1]sproject%[1]s scope.
+			To authorize, run %[1]sgh auth refresh -s project%[1]s.
+		`, "`"),
 		Example: heredoc.Doc(`
 			$ gh issue edit 23 --title "I found a bug" --body "Nothing works"
 			$ gh issue edit 23 --add-label "bug,help wanted" --remove-label "core"
 			$ gh issue edit 23 --add-assignee "@me" --remove-assignee monalisa,hubot
 			$ gh issue edit 23 --add-project "Roadmap" --remove-project v1,v2
 			$ gh issue edit 23 --milestone "Version 1"
+			$ gh issue edit 23 --remove-milestone
 			$ gh issue edit 23 --body-file body.txt
+			$ gh issue edit 23 34 --add-label "help wanted"
 		`),
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// support `-R, --repo` override
 			opts.BaseRepo = f.BaseRepo
 
-			opts.SelectorArg = args[0]
+			opts.SelectorArgs = args
 
 			flags := cmd.Flags()
 
@@ -83,6 +97,14 @@ func NewCmdEdit(f *cmdutil.Factory, runF func(*EditOptions) error) *cobra.Comman
 				}
 			}
 
+			if err := cmdutil.MutuallyExclusive(
+				"specify only one of `--milestone` or `--remove-milestone`",
+				flags.Changed("milestone"),
+				removeMilestone,
+			); err != nil {
+				return err
+			}
+
 			if flags.Changed("title") {
 				opts.Editable.Title.Edited = true
 			}
@@ -95,8 +117,13 @@ func NewCmdEdit(f *cmdutil.Factory, runF func(*EditOptions) error) *cobra.Comman
 			if flags.Changed("add-project") || flags.Changed("remove-project") {
 				opts.Editable.Projects.Edited = true
 			}
-			if flags.Changed("milestone") {
+			if flags.Changed("milestone") || removeMilestone {
 				opts.Editable.Milestone.Edited = true
+
+				// Note that when `--remove-milestone` is provided, the value of
+				// `opts.Editable.Milestone.Value` will automatically be empty,
+				// which results in milestone association removal. For reference,
+				// see the `Editable.MilestoneId` method.
 			}
 
 			if !opts.Editable.Dirty() {
@@ -105,6 +132,10 @@ func NewCmdEdit(f *cmdutil.Factory, runF func(*EditOptions) error) *cobra.Comman
 
 			if opts.Interactive && !opts.IO.CanPrompt() {
 				return cmdutil.FlagErrorf("field to edit flag required when not running interactively")
+			}
+
+			if opts.Interactive && len(opts.SelectorArgs) > 1 {
+				return cmdutil.FlagErrorf("multiple issues cannot be edited interactively")
 			}
 
 			if runF != nil {
@@ -122,9 +153,10 @@ func NewCmdEdit(f *cmdutil.Factory, runF func(*EditOptions) error) *cobra.Comman
 	cmd.Flags().StringSliceVar(&opts.Editable.Assignees.Remove, "remove-assignee", nil, "Remove assigned users by their `login`. Use \"@me\" to unassign yourself.")
 	cmd.Flags().StringSliceVar(&opts.Editable.Labels.Add, "add-label", nil, "Add labels by `name`")
 	cmd.Flags().StringSliceVar(&opts.Editable.Labels.Remove, "remove-label", nil, "Remove labels by `name`")
-	cmd.Flags().StringSliceVar(&opts.Editable.Projects.Add, "add-project", nil, "Add the issue to projects by `name`")
-	cmd.Flags().StringSliceVar(&opts.Editable.Projects.Remove, "remove-project", nil, "Remove the issue from projects by `name`")
+	cmd.Flags().StringSliceVar(&opts.Editable.Projects.Add, "add-project", nil, "Add the issue to projects by `title`")
+	cmd.Flags().StringSliceVar(&opts.Editable.Projects.Remove, "remove-project", nil, "Remove the issue from projects by `title`")
 	cmd.Flags().StringVarP(&opts.Editable.Milestone.Value, "milestone", "m", "", "Edit the milestone the issue belongs to by `name`")
+	cmd.Flags().BoolVar(&removeMilestone, "remove-milestone", false, "Remove the milestone association from the issue")
 
 	return cmd
 }
@@ -135,69 +167,131 @@ func editRun(opts *EditOptions) error {
 		return err
 	}
 
+	// Prompt the user which fields they'd like to edit.
 	editable := opts.Editable
-	lookupFields := []string{"id", "number", "title", "body", "url"}
-	if opts.Interactive || editable.Assignees.Edited {
-		lookupFields = append(lookupFields, "assignees")
-	}
-	if opts.Interactive || editable.Labels.Edited {
-		lookupFields = append(lookupFields, "labels")
-	}
-	if opts.Interactive || editable.Projects.Edited {
-		lookupFields = append(lookupFields, "projectCards")
-	}
-	if opts.Interactive || editable.Milestone.Edited {
-		lookupFields = append(lookupFields, "milestone")
-	}
-
-	issue, repo, err := shared.IssueFromArgWithFields(httpClient, opts.BaseRepo, opts.SelectorArg, lookupFields)
-	if err != nil {
-		return err
-	}
-
-	editable.Title.Default = issue.Title
-	editable.Body.Default = issue.Body
-	editable.Assignees.Default = issue.Assignees.Logins()
-	editable.Labels.Default = issue.Labels.Names()
-	editable.Projects.Default = issue.ProjectCards.ProjectNames()
-	if issue.Milestone != nil {
-		editable.Milestone.Default = issue.Milestone.Title
-	}
-
 	if opts.Interactive {
-		err = opts.FieldsToEditSurvey(&editable)
+		err = opts.FieldsToEditSurvey(opts.Prompter, &editable)
 		if err != nil {
 			return err
 		}
 	}
 
+	lookupFields := []string{"id", "number", "title", "body", "url"}
+	if editable.Assignees.Edited {
+		lookupFields = append(lookupFields, "assignees")
+	}
+	if editable.Labels.Edited {
+		lookupFields = append(lookupFields, "labels")
+	}
+	if editable.Projects.Edited {
+		lookupFields = append(lookupFields, "projectCards")
+		lookupFields = append(lookupFields, "projectItems")
+	}
+	if editable.Milestone.Edited {
+		lookupFields = append(lookupFields, "milestone")
+	}
+
+	// Get all specified issues and make sure they are within the same repo.
+	issues, repo, err := shared.IssuesFromArgsWithFields(httpClient, opts.BaseRepo, opts.SelectorArgs, lookupFields)
+	if err != nil {
+		return err
+	}
+
+	// Fetch editable shared fields once for all issues.
 	apiClient := api.NewClientFromHTTP(httpClient)
-	opts.IO.StartProgressIndicator()
+	opts.IO.StartProgressIndicatorWithLabel("Fetching repository information")
 	err = opts.FetchOptions(apiClient, repo, &editable)
 	opts.IO.StopProgressIndicator()
 	if err != nil {
 		return err
 	}
 
-	if opts.Interactive {
-		editorCommand, err := opts.DetermineEditor()
-		if err != nil {
-			return err
-		}
-		err = opts.EditFieldsSurvey(&editable, editorCommand)
-		if err != nil {
-			return err
-		}
+	// Update all issues in parallel.
+	editedIssueChan := make(chan string, len(issues))
+	failedIssueChan := make(chan string, len(issues))
+	g := sync.WaitGroup{}
+
+	// Only show progress if we will not prompt below or the survey will break up the progress indicator.
+	if !opts.Interactive {
+		opts.IO.StartProgressIndicatorWithLabel(fmt.Sprintf("Updating %d issues", len(issues)))
 	}
 
-	opts.IO.StartProgressIndicator()
-	err = prShared.UpdateIssue(httpClient, repo, issue.ID, issue.IsPullRequest(), editable)
+	for _, issue := range issues {
+		// Copy variables to capture in the go routine below.
+		editable := editable.Clone()
+
+		editable.Title.Default = issue.Title
+		editable.Body.Default = issue.Body
+		editable.Assignees.Default = issue.Assignees.Logins()
+		editable.Labels.Default = issue.Labels.Names()
+		editable.Projects.Default = append(issue.ProjectCards.ProjectNames(), issue.ProjectItems.ProjectTitles()...)
+		projectItems := map[string]string{}
+		for _, n := range issue.ProjectItems.Nodes {
+			projectItems[n.Project.ID] = n.ID
+		}
+		editable.Projects.ProjectItems = projectItems
+		if issue.Milestone != nil {
+			editable.Milestone.Default = issue.Milestone.Title
+		}
+
+		// Allow interactive prompts for one issue; failed earlier if multiple issues specified.
+		if opts.Interactive {
+			editorCommand, err := opts.DetermineEditor()
+			if err != nil {
+				return err
+			}
+			err = opts.EditFieldsSurvey(opts.Prompter, &editable, editorCommand)
+			if err != nil {
+				return err
+			}
+		}
+
+		g.Add(1)
+		go func(issue *api.Issue) {
+			defer g.Done()
+
+			err := prShared.UpdateIssue(httpClient, repo, issue.ID, issue.IsPullRequest(), editable)
+			if err != nil {
+				failedIssueChan <- fmt.Sprintf("failed to update %s: %s", issue.URL, err)
+				return
+			}
+
+			editedIssueChan <- issue.URL
+		}(issue)
+	}
+
+	g.Wait()
+	close(editedIssueChan)
+	close(failedIssueChan)
+
+	// Does nothing if progress was not started above.
 	opts.IO.StopProgressIndicator()
-	if err != nil {
-		return err
+
+	// Print a sorted list of successfully edited issue URLs to stdout.
+	editedIssueURLs := make([]string, 0, len(issues))
+	for editedIssueURL := range editedIssueChan {
+		editedIssueURLs = append(editedIssueURLs, editedIssueURL)
 	}
 
-	fmt.Fprintln(opts.IO.Out, issue.URL)
+	sort.Strings(editedIssueURLs)
+	for _, editedIssueURL := range editedIssueURLs {
+		fmt.Fprintln(opts.IO.Out, editedIssueURL)
+	}
+
+	// Print a sorted list of failures to stderr.
+	failedIssueErrors := make([]string, 0, len(issues))
+	for failedIssueError := range failedIssueChan {
+		failedIssueErrors = append(failedIssueErrors, failedIssueError)
+	}
+
+	sort.Strings(failedIssueErrors)
+	for _, failedIssueError := range failedIssueErrors {
+		fmt.Fprintln(opts.IO.ErrOut, failedIssueError)
+	}
+
+	if len(failedIssueErrors) > 0 {
+		return fmt.Errorf("failed to update %s", text.Pluralize(len(failedIssueErrors), "issue"))
+	}
 
 	return nil
 }

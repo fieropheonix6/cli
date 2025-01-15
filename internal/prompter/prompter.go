@@ -2,101 +2,74 @@ package prompter
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/cli/cli/v2/internal/ghinstance"
 	"github.com/cli/cli/v2/pkg/surveyext"
+	ghPrompter "github.com/cli/go-gh/v2/pkg/prompter"
 )
 
 //go:generate moq -rm -out prompter_mock.go . Prompter
 type Prompter interface {
+	// generic prompts from go-gh
 	Select(string, string, []string) (int, error)
-	MultiSelect(string, string, []string) (int, error)
+	MultiSelect(prompt string, defaults []string, options []string) ([]int, error)
 	Input(string, string) (string, error)
-	InputHostname() (string, error)
 	Password(string) (string, error)
-	AuthToken() (string, error)
 	Confirm(string, bool) (bool, error)
+
+	// gh specific prompts
+	AuthToken() (string, error)
 	ConfirmDeletion(string) error
+	InputHostname() (string, error)
 	MarkdownEditor(string, string, bool) (string, error)
 }
 
-type fileWriter interface {
-	io.Writer
-	Fd() uintptr
-}
-
-type fileReader interface {
-	io.Reader
-	Fd() uintptr
-}
-
-func New(editorCmd string, stdin fileReader, stdout fileWriter, stderr io.Writer) Prompter {
+func New(editorCmd string, stdin ghPrompter.FileReader, stdout ghPrompter.FileWriter, stderr ghPrompter.FileWriter) Prompter {
 	return &surveyPrompter{
-		editorCmd: editorCmd,
+		prompter:  ghPrompter.New(stdin, stdout, stderr),
 		stdin:     stdin,
 		stdout:    stdout,
 		stderr:    stderr,
+		editorCmd: editorCmd,
 	}
 }
 
 type surveyPrompter struct {
+	prompter  *ghPrompter.Prompter
+	stdin     ghPrompter.FileReader
+	stdout    ghPrompter.FileWriter
+	stderr    ghPrompter.FileWriter
 	editorCmd string
-	stdin     fileReader
-	stdout    fileWriter
-	stderr    io.Writer
 }
 
-func (p *surveyPrompter) Select(message, defaultValue string, options []string) (result int, err error) {
-	q := &survey.Select{
-		Message:  message,
-		Options:  options,
-		PageSize: 20,
-	}
-
-	if defaultValue != "" {
-		q.Default = defaultValue
-	}
-
-	err = p.ask(q, &result)
-
-	return
+func (p *surveyPrompter) Select(prompt, defaultValue string, options []string) (int, error) {
+	return p.prompter.Select(prompt, defaultValue, options)
 }
 
-func (p *surveyPrompter) MultiSelect(message, defaultValue string, options []string) (result int, err error) {
-	q := &survey.MultiSelect{
-		Message:  message,
-		Options:  options,
-		PageSize: 20,
-	}
-
-	if defaultValue != "" {
-		q.Default = defaultValue
-	}
-
-	err = p.ask(q, &result)
-
-	return
+func (p *surveyPrompter) MultiSelect(prompt string, defaultValues, options []string) ([]int, error) {
+	return p.prompter.MultiSelect(prompt, defaultValues, options)
 }
 
-func (p *surveyPrompter) ask(q survey.Prompt, response interface{}, opts ...survey.AskOpt) error {
-	opts = append(opts, survey.WithStdio(p.stdin, p.stdout, p.stderr))
-	err := survey.AskOne(q, response, opts...)
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("could not prompt: %w", err)
+func (p *surveyPrompter) Input(prompt, defaultValue string) (string, error) {
+	return p.prompter.Input(prompt, defaultValue)
 }
 
-func (p *surveyPrompter) Input(prompt, defaultValue string) (result string, err error) {
-	err = p.ask(&survey.Input{
-		Message: prompt,
-		Default: defaultValue,
-	}, &result)
+func (p *surveyPrompter) Password(prompt string) (string, error) {
+	return p.prompter.Password(prompt)
+}
 
-	return
+func (p *surveyPrompter) Confirm(prompt string, defaultValue bool) (bool, error) {
+	return p.prompter.Confirm(prompt, defaultValue)
+}
+
+func (p *surveyPrompter) AuthToken() (string, error) {
+	var result string
+	err := p.ask(&survey.Password{
+		Message: "Paste your authentication token:",
+	}, &result, survey.WithValidator(survey.Required))
+	return result, err
 }
 
 func (p *surveyPrompter) ConfirmDeletion(requiredValue string) error {
@@ -115,54 +88,38 @@ func (p *surveyPrompter) ConfirmDeletion(requiredValue string) error {
 			}))
 }
 
-func (p *surveyPrompter) InputHostname() (result string, err error) {
-	err = p.ask(
+func (p *surveyPrompter) InputHostname() (string, error) {
+	var result string
+	err := p.ask(
 		&survey.Input{
-			Message: "GHE hostname:",
+			Message: "Hostname:",
 		}, &result, survey.WithValidator(func(v interface{}) error {
 			return ghinstance.HostnameValidator(v.(string))
 		}))
-
-	return
+	return result, err
 }
 
-func (p *surveyPrompter) Password(prompt string) (result string, err error) {
-	err = p.ask(&survey.Password{
-		Message: prompt,
-	}, &result)
-
-	return
-}
-
-func (p *surveyPrompter) Confirm(prompt string, defaultValue bool) (result bool, err error) {
-	err = p.ask(&survey.Confirm{
-		Message: prompt,
-		Default: defaultValue,
-	}, &result)
-
-	return
-}
-func (p *surveyPrompter) MarkdownEditor(message, defaultValue string, blankAllowed bool) (result string, err error) {
-
-	err = p.ask(&surveyext.GhEditor{
+func (p *surveyPrompter) MarkdownEditor(prompt, defaultValue string, blankAllowed bool) (string, error) {
+	var result string
+	err := p.ask(&surveyext.GhEditor{
 		BlankAllowed:  blankAllowed,
 		EditorCommand: p.editorCmd,
 		Editor: &survey.Editor{
-			Message:       message,
+			Message:       prompt,
 			Default:       defaultValue,
 			FileName:      "*.md",
 			HideDefault:   true,
 			AppendDefault: true,
 		},
 	}, &result)
-
-	return
+	return result, err
 }
 
-func (p *surveyPrompter) AuthToken() (result string, err error) {
-	err = p.ask(&survey.Password{
-		Message: "Paste your authentication token:",
-	}, &result, survey.WithValidator(survey.Required))
-
-	return
+func (p *surveyPrompter) ask(q survey.Prompt, response interface{}, opts ...survey.AskOpt) error {
+	opts = append(opts, survey.WithStdio(p.stdin, p.stdout, p.stderr))
+	err := survey.AskOne(q, response, opts...)
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("could not prompt: %w", err)
 }

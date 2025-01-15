@@ -11,14 +11,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/workflow/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/cli/v2/pkg/prompt"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -27,6 +25,7 @@ type RunOptions struct {
 	HttpClient func() (*http.Client, error)
 	IO         *iostreams.IOStreams
 	BaseRepo   func() (ghrepo.Interface, error)
+	Prompter   iprompter
 
 	Selector  string
 	Ref       string
@@ -39,27 +38,33 @@ type RunOptions struct {
 	Prompt bool
 }
 
+type iprompter interface {
+	Input(string, string) (string, error)
+	Select(string, string, []string) (int, error)
+}
+
 func NewCmdRun(f *cmdutil.Factory, runF func(*RunOptions) error) *cobra.Command {
 	opts := &RunOptions{
 		IO:         f.IOStreams,
 		HttpClient: f.HttpClient,
+		Prompter:   f.Prompter,
 	}
 
 	cmd := &cobra.Command{
 		Use:   "run [<workflow-id> | <workflow-name>]",
 		Short: "Run a workflow by creating a workflow_dispatch event",
-		Long: heredoc.Doc(`
-			Create a workflow_dispatch event for a given workflow.
+		Long: heredoc.Docf(`
+			Create a %[1]sworkflow_dispatch%[1]s event for a given workflow.
 
 			This command will trigger GitHub Actions to run a given workflow file. The given workflow file must
-			support a workflow_dispatch 'on' trigger in order to be run in this way.
+			support an %[1]son.workflow_dispatch%[1]s trigger in order to be run in this way.
 
 			If the workflow file supports inputs, they can be specified in a few ways:
 
 			- Interactively
-			- via -f or -F flags
-			- As JSON, via STDIN
-    `),
+			- Via %[1]s-f/--raw-field%[1]s or %[1]s-F/--field%[1]s flags
+			- As JSON, via standard input
+		`, "`"),
 		Example: heredoc.Doc(`
 			# Have gh prompt you for what workflow you'd like to run and interactively collect inputs
 			$ gh workflow run
@@ -124,9 +129,11 @@ func NewCmdRun(f *cmdutil.Factory, runF func(*RunOptions) error) *cobra.Command 
 		},
 	}
 	cmd.Flags().StringVarP(&opts.Ref, "ref", "r", "", "The branch or tag name which contains the version of the workflow file you'd like to run")
-	cmd.Flags().StringArrayVarP(&opts.MagicFields, "field", "F", nil, "Add a string parameter in `key=value` format, respecting @ syntax")
+	cmd.Flags().StringArrayVarP(&opts.MagicFields, "field", "F", nil, "Add a string parameter in `key=value` format, respecting @ syntax (see \"gh help api\").")
 	cmd.Flags().StringArrayVarP(&opts.RawFields, "raw-field", "f", nil, "Add a string parameter in `key=value` format")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Read workflow inputs as JSON via STDIN")
+
+	_ = cmdutil.RegisterBranchCompletionFlags(f.GitClient, cmd, "ref")
 
 	return cmd
 }
@@ -196,7 +203,7 @@ func (ia *InputAnswer) WriteAnswer(name string, value interface{}) error {
 	return fmt.Errorf("unexpected value type: %v", value)
 }
 
-func collectInputs(yamlContent []byte) (map[string]string, error) {
+func collectInputs(p iprompter, yamlContent []byte) (map[string]string, error) {
 	inputs, err := findInputs(yamlContent)
 	if err != nil {
 		return nil, err
@@ -208,34 +215,36 @@ func collectInputs(yamlContent []byte) (map[string]string, error) {
 		return providedInputs, nil
 	}
 
-	qs := []*survey.Question{}
-	for inputName, input := range inputs {
-		q := &survey.Question{
-			Name: inputName,
-			Prompt: &survey.Input{
-				Message: inputName,
-				Default: input.Default,
-			},
+	for _, input := range inputs {
+		var answer string
+
+		if input.Type == "choice" {
+			name := input.Name
+			if input.Required {
+				name += " (required)"
+			}
+			selected, err := p.Select(name, input.Default, input.Options)
+			if err != nil {
+				return nil, err
+			}
+			answer = input.Options[selected]
+		} else if input.Required {
+			for answer == "" {
+				answer, err = p.Input(input.Name+" (required)", input.Default)
+				if err != nil {
+					break
+				}
+			}
+		} else {
+			answer, err = p.Input(input.Name, input.Default)
 		}
-		if input.Required {
-			q.Validate = survey.Required
+
+		if err != nil {
+			return nil, err
 		}
-		qs = append(qs, q)
-	}
 
-	sort.Slice(qs, func(i, j int) bool {
-		return qs[i].Name < qs[j].Name
-	})
-
-	inputAnswer := InputAnswer{
-		providedInputs: providedInputs,
+		providedInputs[input.Name] = answer
 	}
-	//nolint:staticcheck // SA1019: prompt.SurveyAsk is deprecated: use Prompter
-	err = prompt.SurveyAsk(qs, &inputAnswer)
-	if err != nil {
-		return nil, err
-	}
-
 	return providedInputs, nil
 }
 
@@ -248,7 +257,7 @@ func runRun(opts *RunOptions) error {
 
 	repo, err := opts.BaseRepo()
 	if err != nil {
-		return fmt.Errorf("could not determine base repo: %w", err)
+		return err
 	}
 
 	ref := opts.Ref
@@ -261,7 +270,7 @@ func runRun(opts *RunOptions) error {
 	}
 
 	states := []shared.WorkflowState{shared.Active}
-	workflow, err := shared.ResolveWorkflow(
+	workflow, err := shared.ResolveWorkflow(opts.Prompter,
 		opts.IO, client, repo, opts.Prompt, opts.Selector, states)
 	if err != nil {
 		var fae shared.FilteredAllError
@@ -288,7 +297,7 @@ func runRun(opts *RunOptions) error {
 		if err != nil {
 			return fmt.Errorf("unable to fetch workflow file content: %w", err)
 		}
-		providedInputs, err = collectInputs(yamlContent)
+		providedInputs, err = collectInputs(opts.Prompter, yamlContent)
 		if err != nil {
 			return err
 		}
@@ -328,12 +337,15 @@ func runRun(opts *RunOptions) error {
 }
 
 type WorkflowInput struct {
+	Name        string
 	Required    bool
 	Default     string
 	Description string
+	Type        string
+	Options     []string
 }
 
-func findInputs(yamlContent []byte) (map[string]WorkflowInput, error) {
+func findInputs(yamlContent []byte) ([]WorkflowInput, error) {
 	var rootNode yaml.Node
 	err := yaml.Unmarshal(yamlContent, &rootNode)
 	if err != nil {
@@ -398,16 +410,36 @@ func findInputs(yamlContent []byte) (map[string]WorkflowInput, error) {
 		return nil, errors.New("unable to manually run a workflow without a workflow_dispatch event")
 	}
 
-	out := map[string]WorkflowInput{}
+	out := []WorkflowInput{}
+
+	m := map[string]WorkflowInput{}
 
 	if inputsKeyNode == nil || inputsMapNode == nil {
 		return out, nil
 	}
 
-	err = inputsMapNode.Decode(&out)
+	err = inputsMapNode.Decode(&m)
 	if err != nil {
 		return nil, fmt.Errorf("could not decode workflow inputs: %w", err)
 	}
+
+	for name, input := range m {
+		if input.Type == "choice" && len(input.Options) == 0 {
+			return nil, fmt.Errorf("workflow input %q is of type choice, but has no options", name)
+		}
+		out = append(out, WorkflowInput{
+			Name:        name,
+			Default:     input.Default,
+			Description: input.Description,
+			Required:    input.Required,
+			Options:     input.Options,
+			Type:        input.Type,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 
 	return out, nil
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cli/cli/v2/api"
+	"github.com/cli/cli/v2/pkg/cmdutil"
 )
 
 type check struct {
@@ -15,6 +16,9 @@ type check struct {
 	CompletedAt time.Time `json:"completedAt"`
 	Link        string    `json:"link"`
 	Bucket      string    `json:"bucket"`
+	Event       string    `json:"event"`
+	Workflow    string    `json:"workflow"`
+	Description string    `json:"description"`
 }
 
 type checkCounts struct {
@@ -22,31 +26,23 @@ type checkCounts struct {
 	Passed   int
 	Pending  int
 	Skipping int
+	Canceled int
 }
 
-func aggregateChecks(pr *api.PullRequest, requiredChecks bool) ([]check, checkCounts, error) {
-	checks := []check{}
-	counts := checkCounts{}
+func (ch *check) ExportData(fields []string) map[string]interface{} {
+	return cmdutil.StructExportData(ch, fields)
+}
 
-	if len(pr.StatusCheckRollup.Nodes) == 0 {
-		return checks, counts, fmt.Errorf("no commit found on the pull request")
-	}
-
-	rollup := pr.StatusCheckRollup.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes
-	if len(rollup) == 0 {
-		return checks, counts, fmt.Errorf("no checks reported on the '%s' branch", pr.HeadRefName)
-	}
-
-	checkContexts := pr.StatusCheckRollup.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes
+func aggregateChecks(checkContexts []api.CheckContext, requiredChecks bool) (checks []check, counts checkCounts) {
 	for _, c := range eliminateDuplicates(checkContexts) {
 		if requiredChecks && !c.IsRequired {
 			continue
 		}
 
-		state := c.State
+		state := string(c.State)
 		if state == "" {
 			if c.Status == "COMPLETED" {
-				state = c.Conclusion
+				state = string(c.Conclusion)
 			} else {
 				state = c.Status
 			}
@@ -68,7 +64,11 @@ func aggregateChecks(pr *api.PullRequest, requiredChecks bool) ([]check, checkCo
 			StartedAt:   c.StartedAt,
 			CompletedAt: c.CompletedAt,
 			Link:        link,
+			Event:       c.CheckSuite.WorkflowRun.Event,
+			Workflow:    c.CheckSuite.WorkflowRun.Workflow.Name,
+			Description: c.Description,
 		}
+
 		switch state {
 		case "SUCCESS":
 			item.Bucket = "pass"
@@ -76,9 +76,12 @@ func aggregateChecks(pr *api.PullRequest, requiredChecks bool) ([]check, checkCo
 		case "SKIPPED", "NEUTRAL":
 			item.Bucket = "skipping"
 			counts.Skipping++
-		case "ERROR", "FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED":
+		case "ERROR", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED":
 			item.Bucket = "fail"
 			counts.Failed++
+		case "CANCELLED":
+			item.Bucket = "cancel"
+			counts.Canceled++
 		default: // "EXPECTED", "REQUESTED", "WAITING", "QUEUED", "PENDING", "IN_PROGRESS", "STALE"
 			item.Bucket = "pending"
 			counts.Pending++
@@ -86,12 +89,7 @@ func aggregateChecks(pr *api.PullRequest, requiredChecks bool) ([]check, checkCo
 
 		checks = append(checks, item)
 	}
-
-	if len(checks) == 0 && requiredChecks {
-		return checks, counts, fmt.Errorf("no required checks reported on the '%s' branch", pr.HeadRefName)
-	}
-
-	return checks, counts, nil
+	return
 }
 
 // eliminateDuplicates filters a set of checks to only the most recent ones if the set includes repeated runs
@@ -109,7 +107,7 @@ func eliminateDuplicates(checkContexts []api.CheckContext) []api.CheckContext {
 			}
 			mapContexts[ctx.Context] = struct{}{}
 		} else {
-			key := fmt.Sprintf("%s/%s", ctx.Name, ctx.CheckSuite.WorkflowRun.Workflow.Name)
+			key := fmt.Sprintf("%s/%s/%s", ctx.Name, ctx.CheckSuite.WorkflowRun.Workflow.Name, ctx.CheckSuite.WorkflowRun.Event)
 			if _, exists := mapChecks[key]; exists {
 				continue
 			}

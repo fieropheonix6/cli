@@ -10,13 +10,37 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/pkg/cmd/release/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/pkg/jsonfieldstest"
 	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJSONFields(t *testing.T) {
+	jsonfieldstest.ExpectCommandToSupportJSONFields(t, NewCmdView, []string{
+		"apiUrl",
+		"author",
+		"assets",
+		"body",
+		"createdAt",
+		"databaseId",
+		"id",
+		"isDraft",
+		"isPrerelease",
+		"name",
+		"publishedAt",
+		"tagName",
+		"tarballUrl",
+		"targetCommitish",
+		"uploadUrl",
+		"url",
+		"zipballUrl",
+	})
+}
 
 func Test_NewCmdView(t *testing.T) {
 	tests := []struct {
@@ -213,13 +237,9 @@ func Test_viewRun(t *testing.T) {
 			ios.SetStdinTTY(tt.isTTY)
 			ios.SetStderrTTY(tt.isTTY)
 
-			path := "repos/OWNER/REPO/releases/tags/v1.2.3"
-			if tt.opts.TagName == "" {
-				path = "repos/OWNER/REPO/releases/latest"
-			}
-
 			fakeHTTP := &httpmock.Registry{}
-			fakeHTTP.Register(httpmock.REST("GET", path), httpmock.StringResponse(fmt.Sprintf(`{
+			defer fakeHTTP.Verify(t)
+			shared.StubFetchRelease(t, fakeHTTP, "OWNER", "REPO", tt.opts.TagName, fmt.Sprintf(`{
 				"tag_name": "v1.2.3",
 				"draft": false,
 				"author": { "login": "MonaLisa" },
@@ -231,7 +251,7 @@ func Test_viewRun(t *testing.T) {
 					{ "name": "windows.zip", "size": 12 },
 					{ "name": "linux.tgz", "size": 34 }
 				]
-			}`, tt.releasedAt.Format(time.RFC3339), tt.releaseBody)))
+			}`, tt.releasedAt.Format(time.RFC3339), tt.releaseBody))
 
 			tt.opts.IO = ios
 			tt.opts.HttpClient = func() (*http.Client, error) {

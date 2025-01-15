@@ -13,7 +13,7 @@ func FlagErrorf(format string, args ...interface{}) error {
 	return FlagErrorWrap(fmt.Errorf(format, args...))
 }
 
-// FlagError returns a new FlagError that wraps the specified error.
+// FlagErrorWrap returns a new FlagError that wraps the specified error.
 func FlagErrorWrap(err error) error { return &FlagError{err} }
 
 // A *FlagError indicates an error processing command-line flags or other arguments.
@@ -36,6 +36,9 @@ var SilentError = errors.New("SilentError")
 
 // CancelError signals user-initiated cancellation
 var CancelError = errors.New("CancelError")
+
+// PendingError signals nothing failed but something is pending
+var PendingError = errors.New("PendingError")
 
 func IsUserCancellation(err error) bool {
 	return errors.Is(err, CancelError) || errors.Is(err, terminal.InterruptErr)

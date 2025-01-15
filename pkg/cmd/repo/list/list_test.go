@@ -15,11 +15,85 @@ import (
 
 	"github.com/cli/cli/v2/internal/config"
 	fd "github.com/cli/cli/v2/internal/featuredetection"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/pkg/jsonfieldstest"
 	"github.com/cli/cli/v2/test"
 )
+
+func TestJSONFields(t *testing.T) {
+	jsonfieldstest.ExpectCommandToSupportJSONFields(t, NewCmdList, []string{
+		"archivedAt",
+		"assignableUsers",
+		"codeOfConduct",
+		"contactLinks",
+		"createdAt",
+		"defaultBranchRef",
+		"deleteBranchOnMerge",
+		"description",
+		"diskUsage",
+		"forkCount",
+		"fundingLinks",
+		"hasDiscussionsEnabled",
+		"hasIssuesEnabled",
+		"hasProjectsEnabled",
+		"hasWikiEnabled",
+		"homepageUrl",
+		"id",
+		"isArchived",
+		"isBlankIssuesEnabled",
+		"isEmpty",
+		"isFork",
+		"isInOrganization",
+		"isMirror",
+		"isPrivate",
+		"isSecurityPolicyEnabled",
+		"isTemplate",
+		"isUserConfigurationRepository",
+		"issueTemplates",
+		"issues",
+		"labels",
+		"languages",
+		"latestRelease",
+		"licenseInfo",
+		"mentionableUsers",
+		"mergeCommitAllowed",
+		"milestones",
+		"mirrorUrl",
+		"name",
+		"nameWithOwner",
+		"openGraphImageUrl",
+		"owner",
+		"parent",
+		"primaryLanguage",
+		"projects",
+		"projectsV2",
+		"pullRequestTemplates",
+		"pullRequests",
+		"pushedAt",
+		"rebaseMergeAllowed",
+		"repositoryTopics",
+		"securityPolicyUrl",
+		"sshUrl",
+		"squashMergeAllowed",
+		"stargazerCount",
+		"templateRepository",
+		"updatedAt",
+		"url",
+		"usesCustomOpenGraphImage",
+		"viewerCanAdminister",
+		"viewerDefaultCommitEmail",
+		"viewerDefaultMergeMethod",
+		"viewerHasStarred",
+		"viewerPermission",
+		"viewerPossibleCommitEmails",
+		"viewerSubscription",
+		"visibility",
+		"watchers",
+	})
+}
 
 func TestNewCmdList(t *testing.T) {
 	tests := []struct {
@@ -38,7 +112,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -53,7 +127,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -68,7 +142,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -83,7 +157,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -98,7 +172,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -113,7 +187,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        true,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -128,7 +202,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      true,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -143,7 +217,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "go",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -158,7 +232,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    true,
 				NonArchived: false,
 			},
@@ -173,7 +247,7 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "",
+				Topic:       []string(nil),
 				Archived:    false,
 				NonArchived: true,
 			},
@@ -188,7 +262,22 @@ func TestNewCmdList(t *testing.T) {
 				Fork:        false,
 				Source:      false,
 				Language:    "",
-				Topic:       "cli",
+				Topic:       []string{"cli"},
+				Archived:    false,
+				NonArchived: false,
+			},
+		},
+		{
+			name: "with multiple topic",
+			cli:  "--topic cli --topic multiple-topic",
+			wants: ListOptions{
+				Limit:       30,
+				Owner:       "",
+				Visibility:  "",
+				Fork:        false,
+				Source:      false,
+				Language:    "",
+				Topic:       []string{"cli", "multiple-topic"},
 				Archived:    false,
 				NonArchived: false,
 			},
@@ -267,7 +356,7 @@ func runCommand(rt http.RoundTripper, isTTY bool, cli string) (*test.CmdOut, err
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: rt}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 	}
@@ -310,7 +399,7 @@ func TestRepoList_nontty(t *testing.T) {
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: httpReg}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 		Now: func() time.Time {
@@ -351,7 +440,7 @@ func TestRepoList_tty(t *testing.T) {
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: httpReg}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 		Now: func() time.Time {
@@ -370,9 +459,10 @@ func TestRepoList_tty(t *testing.T) {
 
 		Showing 3 of 3 repositories in @octocat
 
-		octocat/hello-world  My first repository  public        8h
-		octocat/cli          GitHub CLI           public, fork  8h
-		octocat/testing                           private       7d
+		NAME                 DESCRIPTION          INFO          UPDATED
+		octocat/hello-world  My first repository  public        about 8 hours ago
+		octocat/cli          GitHub CLI           public, fork  about 8 hours ago
+		octocat/testing                           private       about 7 days ago
 	`), stdout.String())
 }
 
@@ -420,7 +510,7 @@ func TestRepoList_noVisibilityField(t *testing.T) {
 		HttpClient: func() (*http.Client, error) {
 			return &http.Client{Transport: reg}, nil
 		},
-		Config: func() (config.Config, error) {
+		Config: func() (gh.Config, error) {
 			return config.NewBlankConfig(), nil
 		},
 		Now: func() time.Time {
@@ -434,6 +524,43 @@ func TestRepoList_noVisibilityField(t *testing.T) {
 	err := listRun(&opts)
 
 	assert.NoError(t, err)
+	assert.Equal(t, "", stderr.String())
+	assert.Equal(t, "", stdout.String())
+}
+
+func TestRepoList_invalidOwner(t *testing.T) {
+	ios, _, stdout, stderr := iostreams.Test()
+	ios.SetStdoutTTY(false)
+	ios.SetStdinTTY(false)
+	ios.SetStderrTTY(false)
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	reg.Register(
+		httpmock.GraphQL(`query RepositoryList\b`),
+		httpmock.StringResponse(`{ "data": { "repositoryOwner": null } }`),
+	)
+
+	opts := ListOptions{
+		Owner: "nonexist",
+		IO:    ios,
+		HttpClient: func() (*http.Client, error) {
+			return &http.Client{Transport: reg}, nil
+		},
+		Config: func() (gh.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+		Now: func() time.Time {
+			t, _ := time.Parse(time.RFC822, "19 Feb 21 15:00 UTC")
+			return t
+		},
+		Limit:    30,
+		Detector: &fd.DisabledDetectorMock{},
+	}
+
+	err := listRun(&opts)
+	assert.EqualError(t, err, `the owner handle "nonexist" was not recognized as either a GitHub user or an organization`)
 	assert.Equal(t, "", stderr.String())
 	assert.Equal(t, "", stdout.String())
 }

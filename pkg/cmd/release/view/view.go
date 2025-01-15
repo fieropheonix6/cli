@@ -1,6 +1,7 @@
 package view
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,12 +10,12 @@ import (
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/internal/ghrepo"
+	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmd/release/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
 	"github.com/cli/cli/v2/pkg/markdown"
-	"github.com/cli/cli/v2/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -82,15 +83,16 @@ func viewRun(opts *ViewOptions) error {
 		return err
 	}
 
+	ctx := context.Background()
 	var release *shared.Release
 
 	if opts.TagName == "" {
-		release, err = shared.FetchLatestRelease(httpClient, baseRepo)
+		release, err = shared.FetchLatestRelease(ctx, httpClient, baseRepo)
 		if err != nil {
 			return err
 		}
 	} else {
-		release, err = shared.FetchRelease(httpClient, baseRepo, opts.TagName)
+		release, err = shared.FetchRelease(ctx, httpClient, baseRepo, opts.TagName)
 		if err != nil {
 			return err
 		}
@@ -152,10 +154,11 @@ func renderReleaseTTY(io *iostreams.IOStreams, release *shared.Release) error {
 
 	if len(release.Assets) > 0 {
 		fmt.Fprintf(w, "%s\n", iofmt.Bold("Assets"))
-		table := utils.NewTablePrinter(io)
+		//nolint:staticcheck // SA1019: Showing NAME|SIZE headers adds nothing to table.
+		table := tableprinter.New(io, tableprinter.NoHeader)
 		for _, a := range release.Assets {
-			table.AddField(a.Name, nil, nil)
-			table.AddField(humanFileSize(a.Size), nil, nil)
+			table.AddField(a.Name)
+			table.AddField(humanFileSize(a.Size))
 			table.EndRow()
 		}
 		err := table.Render()

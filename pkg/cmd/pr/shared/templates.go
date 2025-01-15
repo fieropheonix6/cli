@@ -1,23 +1,24 @@
 package shared
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/git"
 	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/githubtemplate"
-	"github.com/cli/cli/v2/pkg/prompt"
 	"github.com/shurcooL/githubv4"
 )
 
 type issueTemplate struct {
-	Gname string `graphql:"name"`
-	Gbody string `graphql:"body"`
+	Gname  string `graphql:"name"`
+	Gbody  string `graphql:"body"`
+	Gtitle string `graphql:"title"`
 }
 
 type pullRequestTemplate struct {
@@ -37,6 +38,10 @@ func (t *issueTemplate) Body() []byte {
 	return []byte(t.Gbody)
 }
 
+func (t *issueTemplate) Title() string {
+	return t.Gtitle
+}
+
 func (t *pullRequestTemplate) Name() string {
 	return t.Gname
 }
@@ -47,6 +52,10 @@ func (t *pullRequestTemplate) NameForSubmit() string {
 
 func (t *pullRequestTemplate) Body() []byte {
 	return []byte(t.Gbody)
+}
+
+func (t *pullRequestTemplate) Title() string {
+	return ""
 }
 
 func listIssueTemplates(httpClient *http.Client, repo ghrepo.Interface) ([]Template, error) {
@@ -109,6 +118,11 @@ type Template interface {
 	Name() string
 	NameForSubmit() string
 	Body() []byte
+	Title() string
+}
+
+type iprompter interface {
+	Select(string, string, []string) (int, error)
 }
 
 type templateManager struct {
@@ -118,6 +132,7 @@ type templateManager struct {
 	isPR       bool
 	httpClient *http.Client
 	detector   fd.Detector
+	prompter   iprompter
 
 	templates      []Template
 	legacyTemplate Template
@@ -126,7 +141,7 @@ type templateManager struct {
 	fetchError error
 }
 
-func NewTemplateManager(httpClient *http.Client, repo ghrepo.Interface, dir string, allowFS bool, isPR bool) *templateManager {
+func NewTemplateManager(httpClient *http.Client, repo ghrepo.Interface, p iprompter, dir string, allowFS bool, isPR bool) *templateManager {
 	cachedClient := api.NewCachedHTTPClient(httpClient, time.Hour*24)
 	return &templateManager{
 		repo:       repo,
@@ -134,6 +149,7 @@ func NewTemplateManager(httpClient *http.Client, repo ghrepo.Interface, dir stri
 		allowFS:    allowFS,
 		isPR:       isPR,
 		httpClient: httpClient,
+		prompter:   p,
 		detector:   fd.NewDetector(cachedClient, repo.RepoHost()),
 	}
 }
@@ -183,12 +199,7 @@ func (m *templateManager) Choose() (Template, error) {
 		blankOption = "Open a blank pull request"
 	}
 
-	var selectedOption int
-	//nolint:staticcheck // SA1019: prompt.SurveyAskOne is deprecated: use Prompter
-	err := prompt.SurveyAskOne(&survey.Select{
-		Message: "Choose a template",
-		Options: append(names, blankOption),
-	}, &selectedOption)
+	selectedOption, err := m.prompter.Select("Choose a template", "", append(names, blankOption))
 	if err != nil {
 		return nil, fmt.Errorf("could not prompt: %w", err)
 	}
@@ -197,6 +208,24 @@ func (m *templateManager) Choose() (Template, error) {
 		return nil, nil
 	}
 	return m.templates[selectedOption], nil
+}
+
+func (m *templateManager) Select(name string) (Template, error) {
+	if err := m.memoizedFetch(); err != nil {
+		return nil, err
+	}
+
+	if len(m.templates) == 0 {
+		return nil, errors.New("no templates found")
+	}
+
+	for _, t := range m.templates {
+		if t.Name() == name {
+			return t, nil
+		}
+	}
+
+	return nil, fmt.Errorf("template %q not found", name)
 }
 
 func (m *templateManager) memoizedFetch() error {
@@ -233,7 +262,8 @@ func (m *templateManager) fetch() error {
 	dir := m.rootDir
 	if dir == "" {
 		var err error
-		dir, err = git.ToplevelDir()
+		gitClient := &git.Client{}
+		dir, err = gitClient.ToplevelDir(context.Background())
 		if err != nil {
 			return nil // abort silently
 		}
@@ -273,4 +303,8 @@ func (t *filesystemTemplate) NameForSubmit() string {
 
 func (t *filesystemTemplate) Body() []byte {
 	return githubtemplate.ExtractContents(t.path)
+}
+
+func (t *filesystemTemplate) Title() string {
+	return githubtemplate.ExtractTitle(t.path)
 }

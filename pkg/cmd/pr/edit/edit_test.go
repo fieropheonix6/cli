@@ -113,6 +113,11 @@ func TestNewCmdEdit(t *testing.T) {
 			wantsErr: false,
 		},
 		{
+			name:     "both body and body-file flags",
+			input:    "23 --body foo --body-file bar",
+			wantsErr: true,
+		},
+		{
 			name:  "base flag",
 			input: "23 --base base-branch-name",
 			output: EditOptions{
@@ -216,9 +221,11 @@ func TestNewCmdEdit(t *testing.T) {
 			output: EditOptions{
 				SelectorArg: "23",
 				Editable: shared.Editable{
-					Projects: shared.EditableSlice{
-						Add:    []string{"Cleanup", "Roadmap"},
-						Edited: true,
+					Projects: shared.EditableProjects{
+						EditableSlice: shared.EditableSlice{
+							Add:    []string{"Cleanup", "Roadmap"},
+							Edited: true,
+						},
 					},
 				},
 			},
@@ -230,9 +237,11 @@ func TestNewCmdEdit(t *testing.T) {
 			output: EditOptions{
 				SelectorArg: "23",
 				Editable: shared.Editable{
-					Projects: shared.EditableSlice{
-						Remove: []string{"Cleanup", "Roadmap"},
-						Edited: true,
+					Projects: shared.EditableProjects{
+						EditableSlice: shared.EditableSlice{
+							Remove: []string{"Cleanup", "Roadmap"},
+							Edited: true,
+						},
 					},
 				},
 			},
@@ -251,6 +260,25 @@ func TestNewCmdEdit(t *testing.T) {
 				},
 			},
 			wantsErr: false,
+		},
+		{
+			name:  "remove-milestone flag",
+			input: "23 --remove-milestone",
+			output: EditOptions{
+				SelectorArg: "23",
+				Editable: shared.Editable{
+					Milestone: shared.EditableString{
+						Value:  "",
+						Edited: true,
+					},
+				},
+			},
+			wantsErr: false,
+		},
+		{
+			name:     "both milestone and remove-milestone flags",
+			input:    "23 --milestone foo --remove-milestone",
+			wantsErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -301,7 +329,7 @@ func Test_editRun(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     *EditOptions
-		httpStubs func(*testing.T, *httpmock.Registry)
+		httpStubs func(*httpmock.Registry)
 		stdout    string
 		stderr    string
 	}{
@@ -341,10 +369,12 @@ func Test_editRun(t *testing.T) {
 						Remove: []string{"docs"},
 						Edited: true,
 					},
-					Projects: shared.EditableSlice{
-						Add:    []string{"Cleanup", "Roadmap"},
-						Remove: []string{"Features"},
-						Edited: true,
+					Projects: shared.EditableProjects{
+						EditableSlice: shared.EditableSlice{
+							Add:    []string{"Cleanup", "CleanupV2"},
+							Remove: []string{"Roadmap", "RoadmapV2"},
+							Edited: true,
+						},
 					},
 					Milestone: shared.EditableString{
 						Value:  "GA",
@@ -353,11 +383,12 @@ func Test_editRun(t *testing.T) {
 				},
 				Fetcher: testFetcher{},
 			},
-			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
-				mockRepoMetadata(t, reg, false)
-				mockPullRequestUpdate(t, reg)
-				mockPullRequestReviewersUpdate(t, reg)
-				mockPullRequestUpdateLabels(t, reg)
+			httpStubs: func(reg *httpmock.Registry) {
+				mockRepoMetadata(reg, false)
+				mockPullRequestUpdate(reg)
+				mockPullRequestReviewersUpdate(reg)
+				mockPullRequestUpdateLabels(reg)
+				mockProjectV2ItemUpdate(reg)
 			},
 			stdout: "https://github.com/OWNER/REPO/pull/123\n",
 		},
@@ -392,10 +423,12 @@ func Test_editRun(t *testing.T) {
 						Remove: []string{"docs"},
 						Edited: true,
 					},
-					Projects: shared.EditableSlice{
-						Value:  []string{"Cleanup", "Roadmap"},
-						Remove: []string{"Features"},
-						Edited: true,
+					Projects: shared.EditableProjects{
+						EditableSlice: shared.EditableSlice{
+							Add:    []string{"Cleanup", "CleanupV2"},
+							Remove: []string{"Roadmap", "RoadmapV2"},
+							Edited: true,
+						},
 					},
 					Milestone: shared.EditableString{
 						Value:  "GA",
@@ -404,10 +437,11 @@ func Test_editRun(t *testing.T) {
 				},
 				Fetcher: testFetcher{},
 			},
-			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
-				mockRepoMetadata(t, reg, true)
-				mockPullRequestUpdate(t, reg)
-				mockPullRequestUpdateLabels(t, reg)
+			httpStubs: func(reg *httpmock.Registry) {
+				mockRepoMetadata(reg, true)
+				mockPullRequestUpdate(reg)
+				mockPullRequestUpdateLabels(reg)
+				mockProjectV2ItemUpdate(reg)
 			},
 			stdout: "https://github.com/OWNER/REPO/pull/123\n",
 		},
@@ -423,10 +457,12 @@ func Test_editRun(t *testing.T) {
 				Fetcher:         testFetcher{},
 				EditorRetriever: testEditorRetriever{},
 			},
-			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
-				mockRepoMetadata(t, reg, false)
-				mockPullRequestUpdate(t, reg)
-				mockPullRequestReviewersUpdate(t, reg)
+			httpStubs: func(reg *httpmock.Registry) {
+				mockRepoMetadata(reg, false)
+				mockPullRequestUpdate(reg)
+				mockPullRequestReviewersUpdate(reg)
+				mockPullRequestUpdateLabels(reg)
+				mockProjectV2ItemUpdate(reg)
 			},
 			stdout: "https://github.com/OWNER/REPO/pull/123\n",
 		},
@@ -442,29 +478,31 @@ func Test_editRun(t *testing.T) {
 				Fetcher:         testFetcher{},
 				EditorRetriever: testEditorRetriever{},
 			},
-			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
-				mockRepoMetadata(t, reg, true)
-				mockPullRequestUpdate(t, reg)
+			httpStubs: func(reg *httpmock.Registry) {
+				mockRepoMetadata(reg, true)
+				mockPullRequestUpdate(reg)
+				mockPullRequestUpdateLabels(reg)
+				mockProjectV2ItemUpdate(reg)
 			},
 			stdout: "https://github.com/OWNER/REPO/pull/123\n",
 		},
 	}
 	for _, tt := range tests {
-		ios, _, stdout, stderr := iostreams.Test()
-		ios.SetStdoutTTY(true)
-		ios.SetStdinTTY(true)
-		ios.SetStderrTTY(true)
-
-		reg := &httpmock.Registry{}
-		defer reg.Verify(t)
-		tt.httpStubs(t, reg)
-
-		httpClient := func() (*http.Client, error) { return &http.Client{Transport: reg}, nil }
-
-		tt.input.IO = ios
-		tt.input.HttpClient = httpClient
-
 		t.Run(tt.name, func(t *testing.T) {
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(true)
+			ios.SetStdinTTY(true)
+			ios.SetStderrTTY(true)
+
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			tt.httpStubs(reg)
+
+			httpClient := func() (*http.Client, error) { return &http.Client{Transport: reg}, nil }
+
+			tt.input.IO = ios
+			tt.input.HttpClient = httpClient
+
 			err := editRun(tt.input)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.stdout, stdout.String())
@@ -473,7 +511,7 @@ func Test_editRun(t *testing.T) {
 	}
 }
 
-func mockRepoMetadata(_ *testing.T, reg *httpmock.Registry, skipReviewers bool) {
+func mockRepoMetadata(reg *httpmock.Registry, skipReviewers bool) {
 	reg.Register(
 		httpmock.GraphQL(`query RepositoryAssignableUsers\b`),
 		httpmock.StringResponse(`
@@ -530,34 +568,70 @@ func mockRepoMetadata(_ *testing.T, reg *httpmock.Registry, skipReviewers bool) 
 			"pageInfo": { "hasNextPage": false }
 		} } } }
 		`))
-	if !skipReviewers {
-		reg.Register(
-			httpmock.GraphQL(`query OrganizationTeamList\b`),
-			httpmock.StringResponse(`
-		{ "data": { "organization": { "teams": {
+	reg.Register(
+		httpmock.GraphQL(`query RepositoryProjectV2List\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": { "projectsV2": {
 			"nodes": [
-				{ "slug": "external", "id": "EXTERNALID" },
-				{ "slug": "core", "id": "COREID" }
+				{ "title": "CleanupV2", "id": "CLEANUPV2ID" },
+				{ "title": "RoadmapV2", "id": "ROADMAPV2ID" }
 			],
 			"pageInfo": { "hasNextPage": false }
 		} } } }
 		`))
+	reg.Register(
+		httpmock.GraphQL(`query OrganizationProjectV2List\b`),
+		httpmock.StringResponse(`
+		{ "data": { "organization": { "projectsV2": {
+			"nodes": [
+				{ "title": "TriageV2", "id": "TRIAGEV2ID" }
+			],
+			"pageInfo": { "hasNextPage": false }
+		} } } }
+		`))
+	reg.Register(
+		httpmock.GraphQL(`query UserProjectV2List\b`),
+		httpmock.StringResponse(`
+		{ "data": { "viewer": { "projectsV2": {
+			"nodes": [
+				{ "title": "MonalisaV2", "id": "MONALISAV2ID" }
+			],
+			"pageInfo": { "hasNextPage": false }
+		} } } }
+		`))
+	if !skipReviewers {
+		reg.Register(
+			httpmock.GraphQL(`query OrganizationTeamList\b`),
+			httpmock.StringResponse(`
+      { "data": { "organization": { "teams": {
+        "nodes": [
+          { "slug": "external", "id": "EXTERNALID" },
+          { "slug": "core", "id": "COREID" }
+        ],
+        "pageInfo": { "hasNextPage": false }
+      } } } }
+		`))
+		reg.Register(
+			httpmock.GraphQL(`query UserCurrent\b`),
+			httpmock.StringResponse(`
+		  { "data": { "viewer": { "login": "monalisa" } } }
+		`))
 	}
 }
 
-func mockPullRequestUpdate(t *testing.T, reg *httpmock.Registry) {
+func mockPullRequestUpdate(reg *httpmock.Registry) {
 	reg.Register(
 		httpmock.GraphQL(`mutation PullRequestUpdate\b`),
 		httpmock.StringResponse(`{}`))
 }
 
-func mockPullRequestReviewersUpdate(t *testing.T, reg *httpmock.Registry) {
+func mockPullRequestReviewersUpdate(reg *httpmock.Registry) {
 	reg.Register(
 		httpmock.GraphQL(`mutation PullRequestUpdateRequestReviews\b`),
 		httpmock.StringResponse(`{}`))
 }
 
-func mockPullRequestUpdateLabels(t *testing.T, reg *httpmock.Registry) {
+func mockPullRequestUpdateLabels(reg *httpmock.Registry) {
 	reg.Register(
 		httpmock.GraphQL(`mutation LabelAdd\b`),
 		httpmock.GraphQLMutation(`
@@ -568,6 +642,15 @@ func mockPullRequestUpdateLabels(t *testing.T, reg *httpmock.Registry) {
 		httpmock.GraphQL(`mutation LabelRemove\b`),
 		httpmock.GraphQLMutation(`
 		{ "data": { "removeLabelsFromLabelable": { "__typename": "" } } }`,
+			func(inputs map[string]interface{}) {}),
+	)
+}
+
+func mockProjectV2ItemUpdate(reg *httpmock.Registry) {
+	reg.Register(
+		httpmock.GraphQL(`mutation UpdateProjectV2Items\b`),
+		httpmock.GraphQLMutation(`
+		{ "data": { "add_000": { "item": { "id": "1" } }, "delete_001": { "item": { "id": "2" } } } }`,
 			func(inputs map[string]interface{}) {}),
 	)
 }
@@ -603,7 +686,9 @@ func (s testSurveyor) EditFields(e *shared.Editable, _ string) error {
 	}
 	e.Assignees.Value = []string{"monalisa", "hubot"}
 	e.Labels.Value = []string{"feature", "TODO", "bug"}
-	e.Projects.Value = []string{"Cleanup", "Roadmap"}
+	e.Labels.Add = []string{"feature", "TODO", "bug"}
+	e.Labels.Remove = []string{"docs"}
+	e.Projects.Value = []string{"Cleanup", "CleanupV2"}
 	e.Milestone.Value = "GA"
 	return nil
 }

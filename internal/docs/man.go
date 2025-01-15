@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cli/cli/v2/internal/text"
+	"github.com/cli/cli/v2/pkg/cmd/root"
 	"github.com/cpuguy83/go-md2man/v2/md2man"
 	"github.com/spf13/cobra"
+	"github.com/spf13/cobra/doc"
 	"github.com/spf13/pflag"
 )
 
@@ -21,20 +24,26 @@ import (
 // subcmds, `sub` and `sub-third`, and `sub` has a subcommand called `third`
 // it is undefined which help output will be in the file `cmd-sub-third.1`.
 func GenManTree(cmd *cobra.Command, dir string) error {
-	return GenManTreeFromOpts(cmd, GenManTreeOptions{
+	if os.Getenv("GH_COBRA") != "" {
+		return doc.GenManTreeFromOpts(cmd, doc.GenManTreeOptions{
+			Path:             dir,
+			CommandSeparator: "-",
+		})
+	}
+	return genManTreeFromOpts(cmd, GenManTreeOptions{
 		Path:             dir,
 		CommandSeparator: "-",
 	})
 }
 
-// GenManTreeFromOpts generates a man page for the command and all descendants.
+// genManTreeFromOpts generates a man page for the command and all descendants.
 // The pages are written to the opts.Path directory.
-func GenManTreeFromOpts(cmd *cobra.Command, opts GenManTreeOptions) error {
+func genManTreeFromOpts(cmd *cobra.Command, opts GenManTreeOptions) error {
 	for _, c := range cmd.Commands() {
 		if !c.IsAvailableCommand() || c.IsAdditionalHelpTopicCommand() {
 			continue
 		}
-		if err := GenManTreeFromOpts(c, opts); err != nil {
+		if err := genManTreeFromOpts(c, opts); err != nil {
 			return err
 		}
 	}
@@ -57,7 +66,7 @@ func GenManTreeFromOpts(cmd *cobra.Command, opts GenManTreeOptions) error {
 		versionString = "GitHub CLI " + v
 	}
 
-	return GenMan(cmd, &GenManHeader{
+	return renderMan(cmd, &GenManHeader{
 		Section: section,
 		Source:  versionString,
 		Manual:  "GitHub CLI manual",
@@ -82,9 +91,9 @@ type GenManHeader struct {
 	Manual  string
 }
 
-// GenMan will generate a man page for the given command and write it to
+// renderMan will generate a man page for the given command and write it to
 // w. The header argument may be nil, however obviously w may not.
-func GenMan(cmd *cobra.Command, header *GenManHeader, w io.Writer) error {
+func renderMan(cmd *cobra.Command, header *GenManHeader, w io.Writer) error {
 	if err := fillHeader(header, cmd.CommandPath()); err != nil {
 		return err
 	}
@@ -141,10 +150,15 @@ func manPrintFlags(buf *bytes.Buffer, flags *pflag.FlagSet) {
 		} else {
 			buf.WriteString(fmt.Sprintf("`--%s`", flag.Name))
 		}
-		if varname == "" {
+
+		defval := getDefaultValueDisplayString(flag)
+
+		if varname == "" && defval != "" {
+			buf.WriteString(fmt.Sprintf(" `%s`\n", strings.TrimSpace(defval)))
+		} else if varname == "" {
 			buf.WriteString("\n")
 		} else {
-			buf.WriteString(fmt.Sprintf(" `<%s>`\n", varname))
+			buf.WriteString(fmt.Sprintf(" `<%s>%s`\n", varname, defval))
 		}
 		buf.WriteString(fmt.Sprintf(":   %s\n\n", usage))
 	})
@@ -165,6 +179,34 @@ func manPrintOptions(buf *bytes.Buffer, command *cobra.Command) {
 	}
 }
 
+func manPrintAliases(buf *bytes.Buffer, command *cobra.Command) {
+	if len(command.Aliases) > 0 {
+		buf.WriteString("# ALIASES\n")
+		buf.WriteString(strings.Join(root.BuildAliasList(command, command.Aliases), ", "))
+		buf.WriteString("\n")
+	}
+}
+
+func manPrintJSONFields(buf *bytes.Buffer, command *cobra.Command) {
+	raw, ok := command.Annotations["help:json-fields"]
+	if !ok {
+		return
+	}
+
+	buf.WriteString("# JSON FIELDS\n")
+	buf.WriteString(text.FormatSlice(strings.Split(raw, ","), 0, 0, "`", "`", true))
+	buf.WriteString("\n")
+}
+
+func manPrintExitCodes(buf *bytes.Buffer) {
+	buf.WriteString("# EXIT CODES\n")
+	buf.WriteString("0: Successful execution\n\n")
+	buf.WriteString("1: Error\n\n")
+	buf.WriteString("2: Command canceled\n\n")
+	buf.WriteString("4: Authentication required\n\n")
+	buf.WriteString("NOTE: Specific commands may have additional exit codes. Refer to the command's help for more information.\n\n")
+}
+
 func genMan(cmd *cobra.Command, header *GenManHeader) []byte {
 	cmd.InitDefaultHelpCmd()
 	cmd.InitDefaultHelpFlag()
@@ -175,16 +217,16 @@ func genMan(cmd *cobra.Command, header *GenManHeader) []byte {
 	buf := new(bytes.Buffer)
 
 	manPreamble(buf, header, cmd, dashCommandName)
-	for _, g := range subcommandGroups(cmd) {
-		if len(g.Commands) == 0 {
-			continue
-		}
-		fmt.Fprintf(buf, "# %s\n", strings.ToUpper(g.Name))
+	for _, g := range root.GroupedCommands(cmd) {
+		fmt.Fprintf(buf, "# %s\n", strings.ToUpper(g.Title))
 		for _, subcmd := range g.Commands {
 			fmt.Fprintf(buf, "`%s`\n:   %s\n\n", manLink(subcmd), subcmd.Short)
 		}
 	}
 	manPrintOptions(buf, cmd)
+	manPrintAliases(buf, cmd)
+	manPrintJSONFields(buf, cmd)
+	manPrintExitCodes(buf)
 	if len(cmd.Example) > 0 {
 		buf.WriteString("# EXAMPLE\n")
 		buf.WriteString(fmt.Sprintf("```\n%s\n```\n", cmd.Example))

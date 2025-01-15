@@ -13,40 +13,46 @@ var _ Extension = &ExtensionMock{}
 
 // ExtensionMock is a mock implementation of Extension.
 //
-// 	func TestSomethingThatUsesExtension(t *testing.T) {
+//	func TestSomethingThatUsesExtension(t *testing.T) {
 //
-// 		// make and configure a mocked Extension
-// 		mockedExtension := &ExtensionMock{
-// 			CurrentVersionFunc: func() string {
-// 				panic("mock out the CurrentVersion method")
-// 			},
-// 			IsBinaryFunc: func() bool {
-// 				panic("mock out the IsBinary method")
-// 			},
-// 			IsLocalFunc: func() bool {
-// 				panic("mock out the IsLocal method")
-// 			},
-// 			IsPinnedFunc: func() bool {
-// 				panic("mock out the IsPinned method")
-// 			},
-// 			NameFunc: func() string {
-// 				panic("mock out the Name method")
-// 			},
-// 			PathFunc: func() string {
-// 				panic("mock out the Path method")
-// 			},
-// 			URLFunc: func() string {
-// 				panic("mock out the URL method")
-// 			},
-// 			UpdateAvailableFunc: func() bool {
-// 				panic("mock out the UpdateAvailable method")
-// 			},
-// 		}
+//		// make and configure a mocked Extension
+//		mockedExtension := &ExtensionMock{
+//			CurrentVersionFunc: func() string {
+//				panic("mock out the CurrentVersion method")
+//			},
+//			IsBinaryFunc: func() bool {
+//				panic("mock out the IsBinary method")
+//			},
+//			IsLocalFunc: func() bool {
+//				panic("mock out the IsLocal method")
+//			},
+//			IsPinnedFunc: func() bool {
+//				panic("mock out the IsPinned method")
+//			},
+//			LatestVersionFunc: func() string {
+//				panic("mock out the LatestVersion method")
+//			},
+//			NameFunc: func() string {
+//				panic("mock out the Name method")
+//			},
+//			OwnerFunc: func() string {
+//				panic("mock out the Owner method")
+//			},
+//			PathFunc: func() string {
+//				panic("mock out the Path method")
+//			},
+//			URLFunc: func() string {
+//				panic("mock out the URL method")
+//			},
+//			UpdateAvailableFunc: func() bool {
+//				panic("mock out the UpdateAvailable method")
+//			},
+//		}
 //
-// 		// use mockedExtension in code that requires Extension
-// 		// and then make assertions.
+//		// use mockedExtension in code that requires Extension
+//		// and then make assertions.
 //
-// 	}
+//	}
 type ExtensionMock struct {
 	// CurrentVersionFunc mocks the CurrentVersion method.
 	CurrentVersionFunc func() string
@@ -60,8 +66,14 @@ type ExtensionMock struct {
 	// IsPinnedFunc mocks the IsPinned method.
 	IsPinnedFunc func() bool
 
+	// LatestVersionFunc mocks the LatestVersion method.
+	LatestVersionFunc func() string
+
 	// NameFunc mocks the Name method.
 	NameFunc func() string
+
+	// OwnerFunc mocks the Owner method.
+	OwnerFunc func() string
 
 	// PathFunc mocks the Path method.
 	PathFunc func() string
@@ -86,8 +98,14 @@ type ExtensionMock struct {
 		// IsPinned holds details about calls to the IsPinned method.
 		IsPinned []struct {
 		}
+		// LatestVersion holds details about calls to the LatestVersion method.
+		LatestVersion []struct {
+		}
 		// Name holds details about calls to the Name method.
 		Name []struct {
+		}
+		// Owner holds details about calls to the Owner method.
+		Owner []struct {
 		}
 		// Path holds details about calls to the Path method.
 		Path []struct {
@@ -103,7 +121,9 @@ type ExtensionMock struct {
 	lockIsBinary        sync.RWMutex
 	lockIsLocal         sync.RWMutex
 	lockIsPinned        sync.RWMutex
+	lockLatestVersion   sync.RWMutex
 	lockName            sync.RWMutex
+	lockOwner           sync.RWMutex
 	lockPath            sync.RWMutex
 	lockURL             sync.RWMutex
 	lockUpdateAvailable sync.RWMutex
@@ -124,7 +144,8 @@ func (mock *ExtensionMock) CurrentVersion() string {
 
 // CurrentVersionCalls gets all the calls that were made to CurrentVersion.
 // Check the length with:
-//     len(mockedExtension.CurrentVersionCalls())
+//
+//	len(mockedExtension.CurrentVersionCalls())
 func (mock *ExtensionMock) CurrentVersionCalls() []struct {
 } {
 	var calls []struct {
@@ -150,7 +171,8 @@ func (mock *ExtensionMock) IsBinary() bool {
 
 // IsBinaryCalls gets all the calls that were made to IsBinary.
 // Check the length with:
-//     len(mockedExtension.IsBinaryCalls())
+//
+//	len(mockedExtension.IsBinaryCalls())
 func (mock *ExtensionMock) IsBinaryCalls() []struct {
 } {
 	var calls []struct {
@@ -176,7 +198,8 @@ func (mock *ExtensionMock) IsLocal() bool {
 
 // IsLocalCalls gets all the calls that were made to IsLocal.
 // Check the length with:
-//     len(mockedExtension.IsLocalCalls())
+//
+//	len(mockedExtension.IsLocalCalls())
 func (mock *ExtensionMock) IsLocalCalls() []struct {
 } {
 	var calls []struct {
@@ -202,7 +225,8 @@ func (mock *ExtensionMock) IsPinned() bool {
 
 // IsPinnedCalls gets all the calls that were made to IsPinned.
 // Check the length with:
-//     len(mockedExtension.IsPinnedCalls())
+//
+//	len(mockedExtension.IsPinnedCalls())
 func (mock *ExtensionMock) IsPinnedCalls() []struct {
 } {
 	var calls []struct {
@@ -210,6 +234,33 @@ func (mock *ExtensionMock) IsPinnedCalls() []struct {
 	mock.lockIsPinned.RLock()
 	calls = mock.calls.IsPinned
 	mock.lockIsPinned.RUnlock()
+	return calls
+}
+
+// LatestVersion calls LatestVersionFunc.
+func (mock *ExtensionMock) LatestVersion() string {
+	if mock.LatestVersionFunc == nil {
+		panic("ExtensionMock.LatestVersionFunc: method is nil but Extension.LatestVersion was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockLatestVersion.Lock()
+	mock.calls.LatestVersion = append(mock.calls.LatestVersion, callInfo)
+	mock.lockLatestVersion.Unlock()
+	return mock.LatestVersionFunc()
+}
+
+// LatestVersionCalls gets all the calls that were made to LatestVersion.
+// Check the length with:
+//
+//	len(mockedExtension.LatestVersionCalls())
+func (mock *ExtensionMock) LatestVersionCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockLatestVersion.RLock()
+	calls = mock.calls.LatestVersion
+	mock.lockLatestVersion.RUnlock()
 	return calls
 }
 
@@ -228,7 +279,8 @@ func (mock *ExtensionMock) Name() string {
 
 // NameCalls gets all the calls that were made to Name.
 // Check the length with:
-//     len(mockedExtension.NameCalls())
+//
+//	len(mockedExtension.NameCalls())
 func (mock *ExtensionMock) NameCalls() []struct {
 } {
 	var calls []struct {
@@ -236,6 +288,33 @@ func (mock *ExtensionMock) NameCalls() []struct {
 	mock.lockName.RLock()
 	calls = mock.calls.Name
 	mock.lockName.RUnlock()
+	return calls
+}
+
+// Owner calls OwnerFunc.
+func (mock *ExtensionMock) Owner() string {
+	if mock.OwnerFunc == nil {
+		panic("ExtensionMock.OwnerFunc: method is nil but Extension.Owner was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockOwner.Lock()
+	mock.calls.Owner = append(mock.calls.Owner, callInfo)
+	mock.lockOwner.Unlock()
+	return mock.OwnerFunc()
+}
+
+// OwnerCalls gets all the calls that were made to Owner.
+// Check the length with:
+//
+//	len(mockedExtension.OwnerCalls())
+func (mock *ExtensionMock) OwnerCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockOwner.RLock()
+	calls = mock.calls.Owner
+	mock.lockOwner.RUnlock()
 	return calls
 }
 
@@ -254,7 +333,8 @@ func (mock *ExtensionMock) Path() string {
 
 // PathCalls gets all the calls that were made to Path.
 // Check the length with:
-//     len(mockedExtension.PathCalls())
+//
+//	len(mockedExtension.PathCalls())
 func (mock *ExtensionMock) PathCalls() []struct {
 } {
 	var calls []struct {
@@ -280,7 +360,8 @@ func (mock *ExtensionMock) URL() string {
 
 // URLCalls gets all the calls that were made to URL.
 // Check the length with:
-//     len(mockedExtension.URLCalls())
+//
+//	len(mockedExtension.URLCalls())
 func (mock *ExtensionMock) URLCalls() []struct {
 } {
 	var calls []struct {
@@ -306,7 +387,8 @@ func (mock *ExtensionMock) UpdateAvailable() bool {
 
 // UpdateAvailableCalls gets all the calls that were made to UpdateAvailable.
 // Check the length with:
-//     len(mockedExtension.UpdateAvailableCalls())
+//
+//	len(mockedExtension.UpdateAvailableCalls())
 func (mock *ExtensionMock) UpdateAvailableCalls() []struct {
 } {
 	var calls []struct {

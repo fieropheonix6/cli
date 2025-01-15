@@ -1,28 +1,34 @@
 package rename
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
-	"github.com/cli/cli/v2/context"
+	ghContext "github.com/cli/cli/v2/context"
 	"github.com/cli/cli/v2/git"
-	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
-	"github.com/cli/cli/v2/pkg/prompt"
 	"github.com/spf13/cobra"
 )
 
+type iprompter interface {
+	Input(string, string) (string, error)
+	Confirm(string, bool) (bool, error)
+}
+
 type RenameOptions struct {
 	HttpClient      func() (*http.Client, error)
+	GitClient       *git.Client
 	IO              *iostreams.IOStreams
-	Config          func() (config.Config, error)
+	Prompter        iprompter
+	Config          func() (gh.Config, error)
 	BaseRepo        func() (ghrepo.Interface, error)
-	Remotes         func() (context.Remotes, error)
+	Remotes         func() (ghContext.Remotes, error)
 	DoConfirm       bool
 	HasRepoOverride bool
 	newRepoSelector string
@@ -32,8 +38,10 @@ func NewCmdRename(f *cmdutil.Factory, runf func(*RenameOptions) error) *cobra.Co
 	opts := &RenameOptions{
 		IO:         f.IOStreams,
 		HttpClient: f.HttpClient,
+		GitClient:  f.GitClient,
 		Remotes:    f.Remotes,
 		Config:     f.Config,
+		Prompter:   f.Prompter,
 	}
 
 	var confirm bool
@@ -41,9 +49,27 @@ func NewCmdRename(f *cmdutil.Factory, runf func(*RenameOptions) error) *cobra.Co
 	cmd := &cobra.Command{
 		Use:   "rename [<new-name>]",
 		Short: "Rename a repository",
-		Long: heredoc.Doc(`Rename a GitHub repository.
+		Long: heredoc.Docf(`
+			Rename a GitHub repository.
+			
+			%[1]s<new-name>%[1]s is the desired repository name without the owner.
+			
+			By default, the current repository is renamed. Otherwise, the repository specified
+			with %[1]s--repo%[1]s is renamed.
+			
+			To transfer repository ownership to another user account or organization,
+			you must follow additional steps on GitHub.com
 
-		By default, this renames the current repository; otherwise renames the specified repository.`),
+			For more information on transferring repository ownership, see:
+			<https://docs.github.com/en/repositories/creating-and-managing-repositories/transferring-a-repository>
+			`, "`"),
+		Example: heredoc.Doc(`
+			# Rename the current repository (foo/bar -> foo/baz)
+			$ gh repo rename baz
+
+			# Rename the specified repository (qux/quux -> qux/baz)
+			$ gh repo rename -R qux/quux baz
+		`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.BaseRepo = f.BaseRepo
@@ -57,7 +83,7 @@ func NewCmdRename(f *cmdutil.Factory, runf func(*RenameOptions) error) *cobra.Co
 
 			if len(args) == 1 && !confirm && !opts.HasRepoOverride {
 				if !opts.IO.CanPrompt() {
-					return cmdutil.FlagErrorf("--confirm required when passing a single argument")
+					return cmdutil.FlagErrorf("--yes required when passing a single argument")
 				}
 				opts.DoConfirm = true
 			}
@@ -65,12 +91,15 @@ func NewCmdRename(f *cmdutil.Factory, runf func(*RenameOptions) error) *cobra.Co
 			if runf != nil {
 				return runf(opts)
 			}
+
 			return renameRun(opts)
 		},
 	}
 
 	cmdutil.EnableRepoOverride(cmd, f)
-	cmd.Flags().BoolVarP(&confirm, "confirm", "y", false, "skip confirmation prompt")
+	cmd.Flags().BoolVar(&confirm, "confirm", false, "Skip confirmation prompt")
+	_ = cmd.Flags().MarkDeprecated("confirm", "use `--yes` instead")
+	cmd.Flags().BoolVarP(&confirm, "yes", "y", false, "Skip the confirmation prompt")
 
 	return cmd
 }
@@ -89,28 +118,17 @@ func renameRun(opts *RenameOptions) error {
 	}
 
 	if newRepoName == "" {
-		//nolint:staticcheck // SA1019: prompt.SurveyAskOne is deprecated: use Prompter
-		err = prompt.SurveyAskOne(
-			&survey.Input{
-				Message: fmt.Sprintf("Rename %s to: ", ghrepo.FullName(currRepo)),
-			},
-			&newRepoName,
-		)
-		if err != nil {
+		if newRepoName, err = opts.Prompter.Input(fmt.Sprintf(
+			"Rename %s to:", ghrepo.FullName(currRepo)), ""); err != nil {
 			return err
 		}
 	}
 
 	if opts.DoConfirm {
 		var confirmed bool
-		p := &survey.Confirm{
-			Message: fmt.Sprintf("Rename %s to %s?", ghrepo.FullName(currRepo), newRepoName),
-			Default: false,
-		}
-		//nolint:staticcheck // SA1019: prompt.SurveyAskOne is deprecated: use Prompter
-		err = prompt.SurveyAskOne(p, &confirmed)
-		if err != nil {
-			return fmt.Errorf("failed to prompt: %w", err)
+		if confirmed, err = opts.Prompter.Confirm(fmt.Sprintf(
+			"Rename %s to %s?", ghrepo.FullName(currRepo), newRepoName), false); err != nil {
+			return err
 		}
 		if !confirmed {
 			return nil
@@ -124,8 +142,6 @@ func renameRun(opts *RenameOptions) error {
 		return err
 	}
 
-	renamedRepo := ghrepo.New(newRepo.Owner.Login, newRepo.Name)
-
 	cs := opts.IO.ColorScheme()
 	if opts.IO.IsStdoutTTY() {
 		fmt.Fprintf(opts.IO.Out, "%s Renamed repository %s\n", cs.SuccessIcon(), ghrepo.FullName(newRepo))
@@ -135,9 +151,13 @@ func renameRun(opts *RenameOptions) error {
 		return nil
 	}
 
-	remote, err := updateRemote(currRepo, renamedRepo, opts)
+	remote, err := updateRemote(currRepo, newRepo, opts)
 	if err != nil {
-		fmt.Fprintf(opts.IO.ErrOut, "%s Warning: unable to update remote %q: %v\n", cs.WarningIcon(), remote.Name, err)
+		if remote != nil {
+			fmt.Fprintf(opts.IO.ErrOut, "%s Warning: unable to update remote %q: %v\n", cs.WarningIcon(), remote.Name, err)
+		} else {
+			fmt.Fprintf(opts.IO.ErrOut, "%s Warning: unable to update remote: %v\n", cs.WarningIcon(), err)
+		}
 	} else if opts.IO.IsStdoutTTY() {
 		fmt.Fprintf(opts.IO.Out, "%s Updated the %q remote\n", cs.SuccessIcon(), remote.Name)
 	}
@@ -145,16 +165,13 @@ func renameRun(opts *RenameOptions) error {
 	return nil
 }
 
-func updateRemote(repo ghrepo.Interface, renamed ghrepo.Interface, opts *RenameOptions) (*context.Remote, error) {
+func updateRemote(repo ghrepo.Interface, renamed ghrepo.Interface, opts *RenameOptions) (*ghContext.Remote, error) {
 	cfg, err := opts.Config()
 	if err != nil {
 		return nil, err
 	}
 
-	protocol, err := cfg.GetOrDefault(repo.RepoHost(), "git_protocol")
-	if err != nil {
-		return nil, err
-	}
+	protocol := cfg.GitProtocol(repo.RepoHost()).Value
 
 	remotes, err := opts.Remotes()
 	if err != nil {
@@ -167,6 +184,7 @@ func updateRemote(repo ghrepo.Interface, renamed ghrepo.Interface, opts *RenameO
 	}
 
 	remoteURL := ghrepo.FormatRemoteURL(renamed, protocol)
-	err = git.UpdateRemoteURL(remote.Name, remoteURL)
+	err = opts.GitClient.UpdateRemoteURL(context.Background(), remote.Name, remoteURL)
+
 	return remote, err
 }

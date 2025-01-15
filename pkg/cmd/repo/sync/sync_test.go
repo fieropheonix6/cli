@@ -122,15 +122,14 @@ func Test_SyncRun(t *testing.T) {
 					httpmock.StringResponse(`{"data":{"repository":{"defaultBranchRef":{"name": "trunk"}}}}`))
 			},
 			gitStubs: func(mgc *mockGitClient) {
-				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(true, nil).Once()
 				mgc.On("CurrentBranch").Return("trunk", nil).Once()
+				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("MergeFastForward", "FETCH_HEAD").Return(nil).Once()
 			},
-			wantStdout: "✓ Synced the \"trunk\" branch from OWNER/REPO to local repository\n",
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER/REPO\" to local repository\n",
 		},
 		{
 			name: "sync local repo with parent - notty",
@@ -139,12 +138,11 @@ func Test_SyncRun(t *testing.T) {
 				Branch: "trunk",
 			},
 			gitStubs: func(mgc *mockGitClient) {
-				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(true, nil).Once()
 				mgc.On("CurrentBranch").Return("trunk", nil).Once()
+				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("MergeFastForward", "FETCH_HEAD").Return(nil).Once()
 			},
 			wantStdout: "",
@@ -157,15 +155,14 @@ func Test_SyncRun(t *testing.T) {
 				SrcArg: "OWNER2/REPO2",
 			},
 			gitStubs: func(mgc *mockGitClient) {
-				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("Fetch", "upstream", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("upstream", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(true, nil).Once()
 				mgc.On("CurrentBranch").Return("trunk", nil).Once()
+				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("MergeFastForward", "FETCH_HEAD").Return(nil).Once()
 			},
-			wantStdout: "✓ Synced the \"trunk\" branch from OWNER2/REPO2 to local repository\n",
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER2/REPO2\" to local repository\n",
 		},
 		{
 			name: "sync local repo with parent and force specified",
@@ -175,15 +172,32 @@ func Test_SyncRun(t *testing.T) {
 				Force:  true,
 			},
 			gitStubs: func(mgc *mockGitClient) {
-				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(false, nil).Once()
 				mgc.On("CurrentBranch").Return("trunk", nil).Once()
+				mgc.On("IsDirty").Return(false, nil).Once()
 				mgc.On("ResetHard", "FETCH_HEAD").Return(nil).Once()
 			},
-			wantStdout: "✓ Synced the \"trunk\" branch from OWNER/REPO to local repository\n",
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER/REPO\" to local repository\n",
+		},
+		{
+			name: "sync local repo with specified source repo and force specified",
+			tty:  true,
+			opts: &SyncOptions{
+				Branch: "trunk",
+				SrcArg: "OWNER2/REPO2",
+				Force:  true,
+			},
+			gitStubs: func(mgc *mockGitClient) {
+				mgc.On("Fetch", "upstream", "refs/heads/trunk").Return(nil).Once()
+				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
+				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(false, nil).Once()
+				mgc.On("CurrentBranch").Return("trunk", nil).Once()
+				mgc.On("IsDirty").Return(false, nil).Once()
+				mgc.On("ResetHard", "FETCH_HEAD").Return(nil).Once()
+			},
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER2/REPO2\" to local repository\n",
 		},
 		{
 			name: "sync local repo with parent and not fast forward merge",
@@ -194,25 +208,25 @@ func Test_SyncRun(t *testing.T) {
 			gitStubs: func(mgc *mockGitClient) {
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(false, nil).Once()
 			},
 			wantErr: true,
 			errMsg:  "can't sync because there are diverging changes; use `--force` to overwrite the destination branch",
 		},
 		{
-			name: "sync local repo with parent and mismatching branch remotes",
+			name: "sync local repo with specified source repo and not fast forward merge",
 			tty:  true,
 			opts: &SyncOptions{
 				Branch: "trunk",
+				SrcArg: "OWNER2/REPO2",
 			},
 			gitStubs: func(mgc *mockGitClient) {
-				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
+				mgc.On("Fetch", "upstream", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("upstream", nil).Once()
+				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(false, nil).Once()
 			},
 			wantErr: true,
-			errMsg:  "can't sync because trunk is not tracking OWNER/REPO",
+			errMsg:  "can't sync because there are diverging changes; use `--force` to overwrite the destination branch",
 		},
 		{
 			name: "sync local repo with parent and local changes",
@@ -223,13 +237,12 @@ func Test_SyncRun(t *testing.T) {
 			gitStubs: func(mgc *mockGitClient) {
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(true, nil).Once()
 				mgc.On("CurrentBranch").Return("trunk", nil).Once()
 				mgc.On("IsDirty").Return(true, nil).Once()
 			},
 			wantErr: true,
-			errMsg:  "can't sync because there are local changes; please stash them before trying again",
+			errMsg:  "refusing to sync due to uncommitted/untracked local changes\ntip: use `git stash --all` before retrying the sync and run `git stash pop` afterwards",
 		},
 		{
 			name: "sync local repo with parent - existing branch, non-current",
@@ -240,12 +253,11 @@ func Test_SyncRun(t *testing.T) {
 			gitStubs: func(mgc *mockGitClient) {
 				mgc.On("Fetch", "origin", "refs/heads/trunk").Return(nil).Once()
 				mgc.On("HasLocalBranch", "trunk").Return(true).Once()
-				mgc.On("BranchRemote", "trunk").Return("origin", nil).Once()
 				mgc.On("IsAncestor", "trunk", "FETCH_HEAD").Return(true, nil).Once()
 				mgc.On("CurrentBranch").Return("test", nil).Once()
 				mgc.On("UpdateBranch", "trunk", "FETCH_HEAD").Return(nil).Once()
 			},
-			wantStdout: "✓ Synced the \"trunk\" branch from OWNER/REPO to local repository\n",
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER/REPO\" to local repository\n",
 		},
 		{
 			name: "sync local repo with parent - create new branch",
@@ -259,7 +271,7 @@ func Test_SyncRun(t *testing.T) {
 				mgc.On("CurrentBranch").Return("test", nil).Once()
 				mgc.On("CreateBranch", "trunk", "FETCH_HEAD", "origin/trunk").Return(nil).Once()
 			},
-			wantStdout: "✓ Synced the \"trunk\" branch from OWNER/REPO to local repository\n",
+			wantStdout: "✓ Synced the \"trunk\" branch from \"OWNER/REPO\" to local repository\n",
 		},
 		{
 			name: "sync remote fork with parent with new api - tty",
@@ -292,7 +304,7 @@ func Test_SyncRun(t *testing.T) {
 					httpmock.StringResponse(`{"data":{"repository":{"defaultBranchRef":{"name": "trunk"}}}}`))
 				reg.Register(
 					httpmock.REST("POST", "repos/FORKOWNER/REPO-FORK/merge-upstream"),
-					httpmock.StatusStringResponse(404, `{}`))
+					httpmock.StatusStringResponse(422, `{}`))
 				reg.Register(
 					httpmock.REST("GET", "repos/OWNER/REPO/git/refs/heads/trunk"),
 					httpmock.StringResponse(`{"object":{"sha":"0xDEADBEEF"}}`))
@@ -423,6 +435,57 @@ func Test_SyncRun(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "can't sync because there are diverging changes; use `--force` to overwrite the destination branch",
+		},
+		{
+			name: "sync remote fork with parent and no existing branch on fork",
+			tty:  true,
+			opts: &SyncOptions{
+				DestArg: "OWNER/REPO-FORK",
+			},
+			httpStubs: func(reg *httpmock.Registry) {
+				reg.Register(
+					httpmock.GraphQL(`query RepositoryFindParent\b`),
+					httpmock.StringResponse(`{"data":{"repository":{"parent":{"name":"REPO","owner":{"login": "OWNER"}}}}}`))
+				reg.Register(
+					httpmock.GraphQL(`query RepositoryInfo\b`),
+					httpmock.StringResponse(`{"data":{"repository":{"defaultBranchRef":{"name": "trunk"}}}}`))
+				reg.Register(
+					httpmock.REST("POST", "repos/OWNER/REPO-FORK/merge-upstream"),
+					httpmock.StatusStringResponse(409, `{"message": "Merge conflict"}`))
+				reg.Register(
+					httpmock.REST("GET", "repos/OWNER/REPO/git/refs/heads/trunk"),
+					httpmock.StringResponse(`{"object":{"sha":"0xDEADBEEF"}}`))
+				reg.Register(
+					httpmock.REST("PATCH", "repos/OWNER/REPO-FORK/git/refs/heads/trunk"),
+					func(req *http.Request) (*http.Response, error) {
+						return &http.Response{
+							StatusCode: 422,
+							Request:    req,
+							Header:     map[string][]string{"Content-Type": {"application/json"}},
+							Body:       io.NopCloser(bytes.NewBufferString(`{"message":"Reference does not exist"}`)),
+						}, nil
+					})
+			},
+			wantErr: true,
+			errMsg:  "trunk branch does not exist on OWNER/REPO-FORK repository",
+		},
+		{
+			name: "sync remote fork with missing workflow scope on token",
+			opts: &SyncOptions{
+				DestArg: "FORKOWNER/REPO-FORK",
+			},
+			httpStubs: func(reg *httpmock.Registry) {
+				reg.Register(
+					httpmock.GraphQL(`query RepositoryInfo\b`),
+					httpmock.StringResponse(`{"data":{"repository":{"defaultBranchRef":{"name": "trunk"}}}}`))
+				reg.Register(
+					httpmock.REST("POST", "repos/FORKOWNER/REPO-FORK/merge-upstream"),
+					httpmock.StatusJSONResponse(422, struct {
+						Message string `json:"message"`
+					}{Message: "refusing to allow an OAuth App to create or update workflow `.github/workflows/unimportant.yml` without `workflow` scope"}))
+			},
+			wantErr: true,
+			errMsg:  "Upstream commits contain workflow changes, which require the `workflow` scope to merge. To request it, run: gh auth refresh -s workflow",
 		},
 	}
 	for _, tt := range tests {

@@ -4,36 +4,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	ghauth "github.com/cli/go-gh/v2/pkg/auth"
 )
 
+// DefaultHostname is the domain name of the default GitHub instance.
 const defaultHostname = "github.com"
 
-// localhost is the domain name of a local GitHub instance
+// Localhost is the domain name of a local GitHub instance.
 const localhost = "github.localhost"
 
-// Default returns the host name of the default GitHub instance
+// TenancyHost is the domain name of a tenancy GitHub instance.
+const tenancyHost = "ghe.com"
+
+// Default returns the host name of the default GitHub instance.
 func Default() string {
 	return defaultHostname
 }
 
-// IsEnterprise reports whether a non-normalized host name looks like a GHE instance
-func IsEnterprise(h string) bool {
-	normalizedHostName := NormalizeHostname(h)
-	return normalizedHostName != defaultHostname && normalizedHostName != localhost
+// TenantName extracts the tenant name from tenancy host name and
+// reports whether it found the tenant name.
+func TenantName(h string) (string, bool) {
+	normalizedHostName := ghauth.NormalizeHostname(h)
+	return cutSuffix(normalizedHostName, "."+tenancyHost)
 }
 
-// NormalizeHostname returns the canonical host name of a GitHub instance
-func NormalizeHostname(h string) string {
-	hostname := strings.ToLower(h)
-	if strings.HasSuffix(hostname, "."+defaultHostname) {
-		return defaultHostname
-	}
-
-	if strings.HasSuffix(hostname, "."+localhost) {
-		return localhost
-	}
-
-	return hostname
+func isGarage(h string) bool {
+	return strings.EqualFold(h, "garage.github.com")
 }
 
 func HostnameValidator(hostname string) error {
@@ -47,7 +44,10 @@ func HostnameValidator(hostname string) error {
 }
 
 func GraphQLEndpoint(hostname string) string {
-	if IsEnterprise(hostname) {
+	if isGarage(hostname) {
+		return fmt.Sprintf("https://%s/api/graphql", hostname)
+	}
+	if ghauth.IsEnterprise(hostname) {
 		return fmt.Sprintf("https://%s/api/graphql", hostname)
 	}
 	if strings.EqualFold(hostname, localhost) {
@@ -57,7 +57,10 @@ func GraphQLEndpoint(hostname string) string {
 }
 
 func RESTPrefix(hostname string) string {
-	if IsEnterprise(hostname) {
+	if isGarage(hostname) {
+		return fmt.Sprintf("https://%s/api/v3/", hostname)
+	}
+	if ghauth.IsEnterprise(hostname) {
 		return fmt.Sprintf("https://%s/api/v3/", hostname)
 	}
 	if strings.EqualFold(hostname, localhost) {
@@ -68,16 +71,17 @@ func RESTPrefix(hostname string) string {
 
 func GistPrefix(hostname string) string {
 	prefix := "https://"
-
 	if strings.EqualFold(hostname, localhost) {
 		prefix = "http://"
 	}
-
 	return prefix + GistHost(hostname)
 }
 
 func GistHost(hostname string) string {
-	if IsEnterprise(hostname) {
+	if isGarage(hostname) {
+		return fmt.Sprintf("%s/gist/", hostname)
+	}
+	if ghauth.IsEnterprise(hostname) {
 		return fmt.Sprintf("%s/gist/", hostname)
 	}
 	if strings.EqualFold(hostname, localhost) {
@@ -91,4 +95,12 @@ func HostPrefix(hostname string) string {
 		return fmt.Sprintf("http://%s/", hostname)
 	}
 	return fmt.Sprintf("https://%s/", hostname)
+}
+
+// Backport strings.CutSuffix from Go 1.20.
+func cutSuffix(s, suffix string) (string, bool) {
+	if !strings.HasSuffix(s, suffix) {
+		return s, false
+	}
+	return s[:len(s)-len(suffix)], true
 }

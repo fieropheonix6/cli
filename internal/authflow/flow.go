@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 
@@ -17,6 +16,8 @@ import (
 	"github.com/cli/cli/v2/utils"
 	"github.com/cli/oauth"
 	"github.com/henvic/httpretty"
+
+	ghauth "github.com/cli/go-gh/v2/pkg/auth"
 )
 
 var (
@@ -28,37 +29,7 @@ var (
 	jsonTypeRE = regexp.MustCompile(`[/+]json($|;)`)
 )
 
-type iconfig interface {
-	Get(string, string) (string, error)
-	Set(string, string, string)
-	Write() error
-}
-
-func AuthFlowWithConfig(cfg iconfig, IO *iostreams.IOStreams, hostname, notice string, additionalScopes []string, isInteractive bool) (string, error) {
-	// TODO this probably shouldn't live in this package. It should probably be in a new package that
-	// depends on both iostreams and config.
-
-	// FIXME: this duplicates `factory.browserLauncher()`
-	browserLauncher := os.Getenv("GH_BROWSER")
-	if browserLauncher == "" {
-		browserLauncher, _ = cfg.Get("", "browser")
-	}
-	if browserLauncher == "" {
-		browserLauncher = os.Getenv("BROWSER")
-	}
-
-	token, userLogin, err := authFlow(hostname, IO, notice, additionalScopes, isInteractive, browserLauncher)
-	if err != nil {
-		return "", err
-	}
-
-	cfg.Set(hostname, "user", userLogin)
-	cfg.Set(hostname, "oauth_token", token)
-
-	return token, cfg.Write()
-}
-
-func authFlow(oauthHost string, IO *iostreams.IOStreams, notice string, additionalScopes []string, isInteractive bool, browserLauncher string) (string, string, error) {
+func AuthFlow(oauthHost string, IO *iostreams.IOStreams, notice string, additionalScopes []string, isInteractive bool, b browser.Browser) (string, string, error) {
 	w := IO.ErrOut
 	cs := IO.ColorScheme()
 
@@ -72,18 +43,16 @@ func authFlow(oauthHost string, IO *iostreams.IOStreams, notice string, addition
 	minimumScopes := []string{"repo", "read:org", "gist"}
 	scopes := append(minimumScopes, additionalScopes...)
 
-	callbackURI := "http://127.0.0.1/callback"
-	if ghinstance.IsEnterprise(oauthHost) {
-		// the OAuth app on Enterprise hosts is still registered with a legacy callback URL
-		// see https://github.com/cli/cli/pull/222, https://github.com/cli/cli/pull/650
-		callbackURI = "http://localhost/"
+	host, err := oauth.NewGitHubHost(ghinstance.HostPrefix(oauthHost))
+	if err != nil {
+		return "", "", err
 	}
 
 	flow := &oauth.Flow{
-		Host:         oauth.GitHubHost(ghinstance.HostPrefix(oauthHost)),
+		Host:         host,
 		ClientID:     oauthClientID,
 		ClientSecret: oauthClientSecret,
-		CallbackURI:  callbackURI,
+		CallbackURI:  getCallbackURI(oauthHost),
 		Scopes:       scopes,
 		DisplayCode: func(code, verificationURL string) error {
 			fmt.Fprintf(w, "%s First copy your one-time code: %s\n", cs.Yellow("!"), cs.Bold(code))
@@ -103,10 +72,9 @@ func authFlow(oauthHost string, IO *iostreams.IOStreams, notice string, addition
 				return nil
 			}
 
-			fmt.Fprintf(w, "%s to open %s in your browser... ", cs.Bold("Press Enter"), oauthHost)
+			fmt.Fprintf(w, "%s to open %s in your browser... ", cs.Bold("Press Enter"), authURL)
 			_ = waitForEnter(IO.In)
 
-			b := browser.New(browserLauncher, IO.Out, IO.ErrOut)
 			if err := b.Browse(authURL); err != nil {
 				fmt.Fprintf(w, "%s Failed opening a web browser at %s\n", cs.Red("!"), authURL)
 				fmt.Fprintf(w, "  %s\n", err)
@@ -137,17 +105,27 @@ func authFlow(oauthHost string, IO *iostreams.IOStreams, notice string, addition
 	return token.Token, userLogin, nil
 }
 
-type cfg struct {
-	authToken string
+func getCallbackURI(oauthHost string) string {
+	callbackURI := "http://127.0.0.1/callback"
+	if ghauth.IsEnterprise(oauthHost) {
+		// the OAuth app on Enterprise hosts is still registered with a legacy callback URL
+		// see https://github.com/cli/cli/pull/222, https://github.com/cli/cli/pull/650
+		callbackURI = "http://localhost/"
+	}
+	return callbackURI
 }
 
-func (c cfg) AuthToken(hostname string) (string, string) {
-	return c.authToken, "oauth_token"
+type cfg struct {
+	token string
+}
+
+func (c cfg) ActiveToken(hostname string) (string, string) {
+	return c.token, "oauth_token"
 }
 
 func getViewer(hostname, token string, logWriter io.Writer) (string, error) {
 	opts := api.HTTPClientOptions{
-		Config: cfg{authToken: token},
+		Config: cfg{token: token},
 		Log:    logWriter,
 	}
 	client, err := api.NewHTTPClient(opts)
