@@ -62,7 +62,7 @@ jobs:
         run: |
           go run ./cmd/gen-docs --website --doc-path dist/manual
           tar -czvf dist/manual.tar.gz -C dist -- manual
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: linux
           if-no-files-found: error
@@ -134,7 +134,7 @@ jobs:
         run: |
           shopt -s failglob
           script/pkgmacos "$TAG_NAME"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: macos
           if-no-files-found: error
@@ -238,7 +238,7 @@ jobs:
           Get-ChildItem -Path .\dist -Filter *.msi | ForEach-Object {
             .\script\sign.ps1 $_.FullName
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: windows
           if-no-files-found: error
